@@ -11,6 +11,11 @@ SOURCE_CHANNEL_ID = 1442370325831487608
 TARGET_CHANNEL_ID = 1449692284596523068
 CODE_COUNTDOWN_SECONDS = 240
 
+NO_TOGGLE_USER_IDS = {
+    1252645184777359391,
+    906546198754775082
+}
+
 # ================================
 # BOT SETUP
 # ================================
@@ -23,13 +28,8 @@ intents.message_content = True
 
 client = discord.Client(intents=intents)
 
-# message_id -> mirrored message
 mirrored_messages = {}
-
-# message_id -> code data
 code_data = {}
-
-# message_id -> toggle task
 toggle_tasks = {}
 
 # ================================
@@ -74,7 +74,6 @@ async def on_message(message):
     if message.author.bot:
         return
 
-    # ONLY listen to source channel
     if message.channel.id != SOURCE_CHANNEL_ID:
         return
 
@@ -83,7 +82,13 @@ async def on_message(message):
         return
 
     code = match.group(0)
-    timer = discord_relative_timestamp(CODE_COUNTDOWN_SECONDS)
+    no_toggle = message.author.id in NO_TOGGLE_USER_IDS
+
+    timer = (
+        discord_relative_timestamp(CODE_COUNTDOWN_SECONDS)
+        if not no_toggle
+        else ""
+    )
 
     code_data[message.id] = {
         "code": code,
@@ -99,9 +104,11 @@ async def on_message(message):
 
     mirrored_messages[message.id] = await target_channel.send(content)
 
-    toggle_tasks[message.id] = client.loop.create_task(
-        toggle_code_emoji(message.id)
-    )
+    # 🚫 Skip emoji toggle for specific users
+    if not no_toggle:
+        toggle_tasks[message.id] = client.loop.create_task(
+            toggle_code_emoji(message.id)
+        )
 
 @client.event
 async def on_message_edit(before, after):
@@ -146,5 +153,3 @@ async def on_message_delete(message):
 # RUN
 # ================================
 client.run(TOKEN)
-
-
