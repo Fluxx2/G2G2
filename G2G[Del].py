@@ -21,7 +21,7 @@ MAX_MESSAGES_TO_CHECK = 40
 # ================================
 TOKEN = os.getenv("DISCORD_TOKEN_4")
 if not TOKEN:
-    raise RuntimeError("DISCORD_TOKEN not set")
+    raise RuntimeError("DISCORD_TOKEN_4 not set")
 
 intents = discord.Intents.default()
 client = discord.Client(intents=intents)
