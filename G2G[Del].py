@@ -13,7 +13,7 @@ CHANNEL_IDS = {
 }
 
 DELETE_AFTER_SECONDS = 220
-CHECK_INTERVAL = 15
+CHECK_INTERVAL = 10
 MAX_MESSAGES_TO_CHECK = 40
 
 # ================================
