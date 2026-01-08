@@ -41,6 +41,12 @@ def discord_relative_timestamp(seconds_from_now: int) -> str:
 
 def build_content(source_id: int) -> str:
     data = code_data[source_id]
+
+    # ✅ ONLY CODE FORMAT FOR SPECIFIC USERS
+    if data["only_code"]:
+        return f"# `     {data['code']}     `"
+
+    # Normal format
     return (
         f"# `     {data['code']}     `\n"
         f"{data['emoji']} {data['timer']}"
@@ -51,7 +57,7 @@ async def toggle_code_emoji(source_message_id: int):
         data = code_data.get(source_message_id)
         msg = mirrored_messages.get(source_message_id)
 
-        if not data or not msg:
+        if not data or not msg or data["only_code"]:
             return
 
         data["emoji"] = "🔚" if data["emoji"] == "⏳" else "⏳"
@@ -82,30 +88,31 @@ async def on_message(message):
         return
 
     code = match.group(0)
-    no_toggle = message.author.id in NO_TOGGLE_USER_IDS
+    only_code = message.author.id in NO_TOGGLE_USER_IDS
 
     timer = (
         discord_relative_timestamp(CODE_COUNTDOWN_SECONDS)
-        if not no_toggle
+        if not only_code
         else ""
     )
 
     code_data[message.id] = {
         "code": code,
         "timer": timer,
-        "emoji": "⏳"
+        "emoji": "⏳",
+        "only_code": only_code
     }
-
-    content = build_content(message.id)
 
     target_channel = client.get_channel(TARGET_CHANNEL_ID)
     if not target_channel:
         return
 
-    mirrored_messages[message.id] = await target_channel.send(content)
+    mirrored_messages[message.id] = await target_channel.send(
+        build_content(message.id)
+    )
 
-    # 🚫 Skip emoji toggle for specific users
-    if not no_toggle:
+    # 🚫 No emoji toggle for specific users
+    if not only_code:
         toggle_tasks[message.id] = client.loop.create_task(
             toggle_code_emoji(message.id)
         )
