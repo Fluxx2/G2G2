@@ -19,7 +19,7 @@ MAX_MESSAGES_TO_CHECK = 40
 # ================================
 # BOT SETUP
 # ================================
-TOKEN = os.getenv("DISCORD_TOKEN")
+TOKEN = os.getenv("DISCORD_TOKEN_4")
 if not TOKEN:
     raise RuntimeError("DISCORD_TOKEN not set")
 
