@@ -7,13 +7,14 @@ from datetime import datetime, timezone
 # ================================
 # CONFIG
 # ================================
-CHANNEL_ID = 1449692284596523068
+SOURCE_CHANNEL_ID = 1442370325831487608
+TARGET_CHANNEL_ID = 1449692284596523068
 CODE_COUNTDOWN_SECONDS = 240
 
 # ================================
 # BOT SETUP
 # ================================
-TOKEN = os.getenv("DISCORD_TOKEN_3")  # use a different env var
+TOKEN = os.getenv("DISCORD_TOKEN_3")
 if not TOKEN:
     raise RuntimeError("DISCORD_TOKEN_3 not set")
 
@@ -66,14 +67,15 @@ async def toggle_code_emoji(source_message_id: int):
 # ================================
 @client.event
 async def on_ready():
-    print(f"✅ Code Bot 2 logged in as {client.user}")
+    print(f"✅ Code Bot logged in as {client.user}")
 
 @client.event
 async def on_message(message):
     if message.author.bot:
         return
 
-    if message.channel.id != CHANNEL_ID:
+    # ONLY listen to source channel
+    if message.channel.id != SOURCE_CHANNEL_ID:
         return
 
     match = re.search(r"\b[a-zA-Z0-9]{5,6}\b", message.content)
@@ -90,7 +92,12 @@ async def on_message(message):
     }
 
     content = build_content(message.id)
-    mirrored_messages[message.id] = await message.channel.send(content)
+
+    target_channel = client.get_channel(TARGET_CHANNEL_ID)
+    if not target_channel:
+        return
+
+    mirrored_messages[message.id] = await target_channel.send(content)
 
     toggle_tasks[message.id] = client.loop.create_task(
         toggle_code_emoji(message.id)
@@ -98,6 +105,9 @@ async def on_message(message):
 
 @client.event
 async def on_message_edit(before, after):
+    if after.channel.id != SOURCE_CHANNEL_ID:
+        return
+
     data = code_data.get(after.id)
     msg = mirrored_messages.get(after.id)
 
@@ -116,6 +126,9 @@ async def on_message_edit(before, after):
 
 @client.event
 async def on_message_delete(message):
+    if message.channel.id != SOURCE_CHANNEL_ID:
+        return
+
     msg = mirrored_messages.pop(message.id, None)
     code_data.pop(message.id, None)
 
