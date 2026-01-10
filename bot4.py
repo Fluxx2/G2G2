@@ -9,7 +9,9 @@ from datetime import datetime, timezone
 # ================================
 SOURCE_CHANNEL_ID = 1442370325831487608
 TARGET_CHANNEL_ID = 1449692284596523068
-CODE_COUNTDOWN_SECONDS = 240
+MAX_AGE_SECONDS = 240  # 4 minutes
+TOGGLE_INTERVAL = 28   # seconds
+EDIT_THROTTLE = 1.2    # seconds between PATCH calls
 
 NO_TOGGLE_USER_IDS = {
     1252645184777359391,
@@ -30,11 +32,14 @@ client = discord.Client(intents=intents)
 
 mirrored_messages = {}
 code_data = {}
-toggle_tasks = {}
 
 # ================================
 # HELPERS
 # ================================
+def is_fresh(msg: discord.Message) -> bool:
+    age = (datetime.now(timezone.utc) - msg.created_at).total_seconds()
+    return age <= MAX_AGE_SECONDS
+
 def discord_relative_timestamp(seconds_from_now: int) -> str:
     unix = int(datetime.now(timezone.utc).timestamp()) + seconds_from_now
     return f"<t:{unix}:R>"
@@ -42,31 +47,48 @@ def discord_relative_timestamp(seconds_from_now: int) -> str:
 def build_content(source_id: int) -> str:
     data = code_data[source_id]
 
-    # ✅ ONLY CODE FORMAT FOR SPECIFIC USERS
     if data["only_code"]:
         return f"# `     {data['code']}     `"
 
-    # Normal format
     return (
         f"# `     {data['code']}     `\n"
         f"{data['emoji']} {data['timer']}"
     )
 
-async def toggle_code_emoji(source_message_id: int):
-    while True:
-        data = code_data.get(source_message_id)
-        msg = mirrored_messages.get(source_message_id)
+async def expire_mirrored_message(source_id: int):
+    await asyncio.sleep(MAX_AGE_SECONDS)
 
-        if not data or not msg or data["only_code"]:
-            return
+    msg = mirrored_messages.pop(source_id, None)
+    code_data.pop(source_id, None)
 
-        data["emoji"] = "🔚" if data["emoji"] == "⏳" else "⏳"
+    if msg:
         try:
-            await msg.edit(content=build_content(source_message_id))
-        except:
+            await msg.delete()
+        except (discord.NotFound, discord.HTTPException):
             pass
 
-        await asyncio.sleep(28)
+# ================================
+# EMOJI TOGGLE LOOP (SINGLE LOOP)
+# ================================
+async def emoji_toggle_loop():
+    await client.wait_until_ready()
+
+    while not client.is_closed():
+        for source_id, msg in list(mirrored_messages.items()):
+            data = code_data.get(source_id)
+
+            if not data or data["only_code"]:
+                continue
+
+            data["emoji"] = "🔚" if data["emoji"] == "⏳" else "⏳"
+
+            try:
+                await msg.edit(content=build_content(source_id))
+                await asyncio.sleep(EDIT_THROTTLE)
+            except (discord.NotFound, discord.HTTPException):
+                pass
+
+        await asyncio.sleep(TOGGLE_INTERVAL)
 
 # ================================
 # EVENTS
@@ -74,6 +96,7 @@ async def toggle_code_emoji(source_message_id: int):
 @client.event
 async def on_ready():
     print(f"✅ Code Bot logged in as {client.user}")
+    client.loop.create_task(emoji_toggle_loop())
 
 @client.event
 async def on_message(message):
@@ -81,6 +104,9 @@ async def on_message(message):
         return
 
     if message.channel.id != SOURCE_CHANNEL_ID:
+        return
+
+    if not is_fresh(message):
         return
 
     match = re.search(r"\b[a-zA-Z0-9]{5,6}\b", message.content)
@@ -91,7 +117,7 @@ async def on_message(message):
     only_code = message.author.id in NO_TOGGLE_USER_IDS
 
     timer = (
-        discord_relative_timestamp(CODE_COUNTDOWN_SECONDS)
+        discord_relative_timestamp(MAX_AGE_SECONDS)
         if not only_code
         else ""
     )
@@ -111,15 +137,14 @@ async def on_message(message):
         build_content(message.id)
     )
 
-    # 🚫 No emoji toggle for specific users
-    if not only_code:
-        toggle_tasks[message.id] = client.loop.create_task(
-            toggle_code_emoji(message.id)
-        )
+    client.loop.create_task(expire_mirrored_message(message.id))
 
 @client.event
 async def on_message_edit(before, after):
     if after.channel.id != SOURCE_CHANNEL_ID:
+        return
+
+    if not is_fresh(after):
         return
 
     data = code_data.get(after.id)
@@ -133,9 +158,10 @@ async def on_message_edit(before, after):
         return
 
     data["code"] = match.group(0)
+
     try:
         await msg.edit(content=build_content(after.id))
-    except:
+    except (discord.NotFound, discord.HTTPException):
         pass
 
 @client.event
@@ -146,14 +172,10 @@ async def on_message_delete(message):
     msg = mirrored_messages.pop(message.id, None)
     code_data.pop(message.id, None)
 
-    task = toggle_tasks.pop(message.id, None)
-    if task:
-        task.cancel()
-
     if msg:
         try:
             await msg.delete()
-        except:
+        except (discord.NotFound, discord.HTTPException):
             pass
 
 # ================================
