@@ -45,10 +45,8 @@ def discord_relative_timestamp(seconds_from_now: int) -> str:
     return f"<t:{unix}:R>"
 
 AMBIGUOUS_MAP = {
-    "i": "l",
-    "l": "i",
     "I": "L",
-    "L": "I",
+    "l": "I",
 }
 
 def generate_alt_code(code: str) -> str | None:
@@ -212,3 +210,4 @@ async def on_message_delete(message):
 # RUN
 # ================================
 client.run(TOKEN)
+
