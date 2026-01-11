@@ -11,7 +11,7 @@ SOURCE_CHANNEL_ID = 1442370325831487608
 TARGET_CHANNEL_ID = 1449692284596523068
 MAX_AGE_SECONDS = 240  # 4 minutes
 TOGGLE_INTERVAL = 28   # seconds
-EDIT_THROTTLE = 1.2    # seconds between PATCH calls
+EDIT_THROTTLE = 1.6   # seconds between PATCH calls
 
 NO_TOGGLE_USER_IDS = {
     1252645184777359391,
@@ -44,16 +44,39 @@ def discord_relative_timestamp(seconds_from_now: int) -> str:
     unix = int(datetime.now(timezone.utc).timestamp()) + seconds_from_now
     return f"<t:{unix}:R>"
 
+AMBIGUOUS_MAP = {
+    "i": "l",
+    "l": "i",
+    "I": "L",
+    "L": "I",
+}
+
+def generate_alt_code(code: str) -> str | None:
+    if not any(c in AMBIGUOUS_MAP for c in code):
+        return None
+
+    chars = list(code)
+    for i, c in enumerate(chars):
+        if c in AMBIGUOUS_MAP:
+            chars[i] = AMBIGUOUS_MAP[c]
+
+    alt = "".join(chars)
+    return alt if alt != code else None
+
 def build_content(source_id: int) -> str:
     data = code_data[source_id]
 
-    if data["only_code"]:
-        return f"# `     {data['code']}     `"
+    codes = [f"`     {data['code']}     `"]
 
-    return (
-        f"# `     {data['code']}     `\n"
-        f"{data['emoji']} {data['timer']}"
-    )
+    if data.get("alt_code"):
+        codes.append(f"`     {data['alt_code']}     `")
+
+    header = "# " + " ".join(codes)
+
+    if data["only_code"]:
+        return header
+
+    return f"{header}\n{data['emoji']} {data['timer']}"
 
 async def expire_mirrored_message(source_id: int):
     await asyncio.sleep(MAX_AGE_SECONDS)
@@ -68,7 +91,7 @@ async def expire_mirrored_message(source_id: int):
             pass
 
 # ================================
-# EMOJI TOGGLE LOOP (SINGLE LOOP)
+# EMOJI TOGGLE LOOP
 # ================================
 async def emoji_toggle_loop():
     await client.wait_until_ready()
@@ -116,14 +139,15 @@ async def on_message(message):
     code = match.group(0)
     only_code = message.author.id in NO_TOGGLE_USER_IDS
 
-    timer = (
-        discord_relative_timestamp(MAX_AGE_SECONDS)
-        if not only_code
-        else ""
-    )
+    alt_code = None
+    if not only_code:
+        alt_code = generate_alt_code(code)
+
+    timer = discord_relative_timestamp(MAX_AGE_SECONDS) if not only_code else ""
 
     code_data[message.id] = {
         "code": code,
+        "alt_code": alt_code,
         "timer": timer,
         "emoji": "⏳",
         "only_code": only_code
@@ -157,7 +181,13 @@ async def on_message_edit(before, after):
     if not match:
         return
 
-    data["code"] = match.group(0)
+    new_code = match.group(0)
+    data["code"] = new_code
+
+    if not data["only_code"]:
+        data["alt_code"] = generate_alt_code(new_code)
+    else:
+        data["alt_code"] = None
 
     try:
         await msg.edit(content=build_content(after.id))
