@@ -3,20 +3,23 @@ import asyncio
 import os
 import re
 from datetime import datetime, timezone
+from itertools import product
 
 # ================================
 # CONFIG
 # ================================
 SOURCE_CHANNEL_ID = 1442370325831487608
 TARGET_CHANNEL_ID = 1449692284596523068
-MAX_AGE_SECONDS = 240  # 4 minutes
-TOGGLE_INTERVAL = 28   # seconds
-EDIT_THROTTLE = 1.6   # seconds between PATCH calls
+MAX_AGE_SECONDS = 240
+TOGGLE_INTERVAL = 28
+EDIT_THROTTLE = 1.6
 
 NO_TOGGLE_USER_IDS = {
     1252645184777359391,
     906546198754775082
 }
+
+MAX_VARIANTS = 16  # SAFETY CAP
 
 # ================================
 # BOT SETUP
@@ -44,32 +47,41 @@ def discord_relative_timestamp(seconds_from_now: int) -> str:
     unix = int(datetime.now(timezone.utc).timestamp()) + seconds_from_now
     return f"<t:{unix}:R>"
 
-AMBIGUOUS_MAP = {
-    "I": "L",
-    "l": "I",
+# Ambiguous characters
+AMBIGUOUS_SETS = {
+    "I": ["I", "l"],
+    "l": ["l", "I"],
 }
 
-def generate_alt_code(code: str) -> str | None:
-    if not any(c in AMBIGUOUS_MAP for c in code):
-        return None
+def generate_all_variants(code: str) -> list[str]:
+    pools = [AMBIGUOUS_SETS.get(c, [c]) for c in code]
+    variants = ["".join(p) for p in product(*pools)]
 
-    chars = list(code)
-    for i, c in enumerate(chars):
-        if c in AMBIGUOUS_MAP:
-            chars[i] = AMBIGUOUS_MAP[c]
+    seen = set()
+    unique = []
+    for v in variants:
+        if v not in seen:
+            seen.add(v)
+            unique.append(v)
 
-    alt = "".join(chars)
-    return alt if alt != code else None
+    if code in unique:
+        unique.remove(code)
+    unique.insert(0, code)
+
+    return unique[:MAX_VARIANTS]
 
 def build_content(source_id: int) -> str:
     data = code_data[source_id]
+    codes = data["codes"]
 
-    codes = [f"`     {data['code']}     `"]
-
-    if data.get("alt_code"):
-        codes.append(f"`     {data['alt_code']}     `")
-
-    header = "# " + " ".join(codes)
+    # Single code → no numbering
+    if len(codes) == 1:
+        header = f"# `     {codes[0]}     `"
+    else:
+        header = "\n".join(
+            f"# {i}) `   {code}   `"
+            for i, code in enumerate(codes, start=1)
+        )
 
     if data["only_code"]:
         return header
@@ -137,15 +149,11 @@ async def on_message(message):
     code = match.group(0)
     only_code = message.author.id in NO_TOGGLE_USER_IDS
 
-    alt_code = None
-    if not only_code:
-        alt_code = generate_alt_code(code)
-
+    codes = [code] if only_code else generate_all_variants(code)
     timer = discord_relative_timestamp(MAX_AGE_SECONDS) if not only_code else ""
 
     code_data[message.id] = {
-        "code": code,
-        "alt_code": alt_code,
+        "codes": codes,
         "timer": timer,
         "emoji": "⏳",
         "only_code": only_code
@@ -180,12 +188,12 @@ async def on_message_edit(before, after):
         return
 
     new_code = match.group(0)
-    data["code"] = new_code
 
-    if not data["only_code"]:
-        data["alt_code"] = generate_alt_code(new_code)
-    else:
-        data["alt_code"] = None
+    data["codes"] = (
+        [new_code]
+        if data["only_code"]
+        else generate_all_variants(new_code)
+    )
 
     try:
         await msg.edit(content=build_content(after.id))
@@ -210,4 +218,3 @@ async def on_message_delete(message):
 # RUN
 # ================================
 client.run(TOKEN)
-
