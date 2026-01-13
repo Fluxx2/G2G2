@@ -13,7 +13,6 @@ TARGET_CHANNEL_ID = 1449692284596523068
 
 MAX_AGE_SECONDS = 225
 TOGGLE_INTERVAL = 28
-EDIT_THROTTLE = 1.6
 
 NO_TOGGLE_USER_IDS = {
     1252645184777359391,
@@ -36,7 +35,6 @@ intents.message_content = True
 client = discord.Client(intents=intents)
 
 AGGREGATE_MESSAGE_ID = None
-STANDBY_MESSAGE_ID = None
 emoji_state = "⏳"
 
 # oldest → newest
@@ -57,11 +55,9 @@ def generate_all_variants(code: str) -> list[str]:
     pools = [AMBIGUOUS_SETS.get(c, [c]) for c in code]
     variants = ["".join(p) for p in product(*pools)]
 
-    seen = set()
     unique = []
     for v in variants:
-        if v not in seen:
-            seen.add(v)
+        if v not in unique:
             unique.append(v)
 
     if code in unique:
@@ -74,15 +70,18 @@ def relative_from(ts: datetime) -> str:
     return f"<t:{int(ts.timestamp())}:R>"
 
 # ================================
-# MESSAGE BUILD (UPSIDE-DOWN)
+# MESSAGE BUILD (ONE MESSAGE ONLY)
 # ================================
 def build_message() -> str:
+    if not code_entries:
+        return "no codes as of rn"
+
     lines = []
     total = len(code_entries)
 
-    # newest → oldest
+    # newest → oldest (oldest = #1)
     for idx, entry in enumerate(reversed(code_entries)):
-        rank = total - idx  # oldest ends up as #1
+        rank = total - idx
 
         code_text = (
             entry["codes"][0]
@@ -96,62 +95,39 @@ def build_message() -> str:
             else ""
         )
 
-        lines.append(f"# {rank}) `{code_text}` {timer}")
+        lines.append(f"{rank}) `{code_text}` {timer}")
 
     return f"{emoji_state}\n\n" + "\n".join(lines)
 
 # ================================
-# CORE UPDATE LOGIC
+# CORE UPDATE (EDIT ONLY)
 # ================================
-async def update_aggregate():
-    global AGGREGATE_MESSAGE_ID, STANDBY_MESSAGE_ID
+async def ensure_message():
+    global AGGREGATE_MESSAGE_ID
 
     channel = client.get_channel(TARGET_CHANNEL_ID)
     if not channel:
-        return
+        return None
 
-    # =====================
-    # NO CODES → STANDBY
-    # =====================
-    if not code_entries:
-        if AGGREGATE_MESSAGE_ID:
-            try:
-                msg = await channel.fetch_message(AGGREGATE_MESSAGE_ID)
-                await msg.delete()
-            except discord.NotFound:
-                pass
+    if AGGREGATE_MESSAGE_ID:
+        try:
+            return await channel.fetch_message(AGGREGATE_MESSAGE_ID)
+        except discord.NotFound:
             AGGREGATE_MESSAGE_ID = None
 
-        if STANDBY_MESSAGE_ID is None:
-            standby = await channel.send("no codes as of rn")
-            STANDBY_MESSAGE_ID = standby.id
+    msg = await channel.send("no codes as of rn")
+    AGGREGATE_MESSAGE_ID = msg.id
+    return msg
 
-        return
-
-    # =====================
-    # CODES EXIST → AGGREGATE
-    # =====================
-    if STANDBY_MESSAGE_ID:
-        try:
-            msg = await channel.fetch_message(STANDBY_MESSAGE_ID)
-            await msg.delete()
-        except discord.NotFound:
-            pass
-        STANDBY_MESSAGE_ID = None
-
-    content = build_message()
-
-    if AGGREGATE_MESSAGE_ID is None:
-        msg = await channel.send(content)
-        AGGREGATE_MESSAGE_ID = msg.id
+async def update_message():
+    msg = await ensure_message()
+    if not msg:
         return
 
     try:
-        msg = await channel.fetch_message(AGGREGATE_MESSAGE_ID)
-        await msg.edit(content=content)
-    except discord.NotFound:
-        msg = await channel.send(content)
-        AGGREGATE_MESSAGE_ID = msg.id
+        await msg.edit(content=build_message())
+    except discord.HTTPException:
+        pass
 
 # ================================
 # LOOPS
@@ -163,7 +139,7 @@ async def emoji_toggle_loop():
     while not client.is_closed():
         if code_entries:
             emoji_state = "🔚" if emoji_state == "⏳" else "⏳"
-            await update_aggregate()
+            await update_message()
         await asyncio.sleep(TOGGLE_INTERVAL)
 
 async def expiry_loop():
@@ -175,7 +151,7 @@ async def expiry_loop():
         while code_entries and (now - code_entries[0]["created_at"]).total_seconds() >= MAX_AGE_SECONDS:
             code_entries.pop(0)
 
-        await update_aggregate()
+        await update_message()
         await asyncio.sleep(1)
 
 # ================================
@@ -183,11 +159,11 @@ async def expiry_loop():
 # ================================
 @client.event
 async def on_ready():
-    global AGGREGATE_MESSAGE_ID, STANDBY_MESSAGE_ID
+    global AGGREGATE_MESSAGE_ID
 
     print(f"✅ Logged in as {client.user}")
 
-    # 🔥 CLEANUP: delete ALL bot messages in target channel
+    # 🔥 DELETE ALL OLD BOT MESSAGES
     channel = client.get_channel(TARGET_CHANNEL_ID)
     if channel:
         async for msg in channel.history(limit=100):
@@ -198,7 +174,8 @@ async def on_ready():
                     pass
 
     AGGREGATE_MESSAGE_ID = None
-    STANDBY_MESSAGE_ID = None
+
+    await update_message()
 
     client.loop.create_task(emoji_toggle_loop())
     client.loop.create_task(expiry_loop())
@@ -229,7 +206,7 @@ async def on_message(message):
         "show_timer": message.author.id not in NO_TOGGLE_USER_IDS
     })
 
-    await update_aggregate()
+    await update_message()
 
 @client.event
 async def on_message_edit(before, after):
@@ -250,28 +227,25 @@ async def on_message_edit(before, after):
             )
             break
 
-    await update_aggregate()
+    await update_message()
 
 @client.event
 async def on_message_delete(message):
-    global AGGREGATE_MESSAGE_ID, STANDBY_MESSAGE_ID, code_entries
+    global AGGREGATE_MESSAGE_ID, code_entries
 
+    # source deleted → remove code
     if message.channel.id == SOURCE_CHANNEL_ID:
         code_entries = [
             e for e in code_entries
             if e["source_id"] != message.id
         ]
-        await update_aggregate()
+        await update_message()
         return
 
+    # aggregate deleted → recreate
     if message.id == AGGREGATE_MESSAGE_ID:
         AGGREGATE_MESSAGE_ID = None
-        await update_aggregate()
-        return
-
-    if message.id == STANDBY_MESSAGE_ID:
-        STANDBY_MESSAGE_ID = None
-        await update_aggregate()
+        await update_message()
 
 # ================================
 # RUN
