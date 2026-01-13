@@ -4,6 +4,7 @@ import os
 import sqlite3
 from datetime import datetime, date, timedelta
 import pytz
+from discord.errors import HTTPException
 
 # ================================
 # CONFIG
@@ -13,12 +14,12 @@ COMMAND_CHANNEL_ID = 1442370326116827259
 TARGET_EMOJI_ID = 1443112156693397534
 
 DB_FILE = "wins.db"
-HOURLY_SYNC_INTERVAL = 3600  # 1 hour
-SYNC_LOOKBACK_HOURS = 24
 
 TOKEN = os.getenv("DISCORD_TOKEN_4")
 if not TOKEN:
     raise RuntimeError("DISCORD_TOKEN_4 not set")
+
+IST = pytz.timezone("Asia/Kolkata")
 
 # ================================
 # BOT SETUP
@@ -28,7 +29,6 @@ intents.message_content = True
 intents.reactions = True
 
 client = discord.Client(intents=intents)
-UTC = pytz.UTC
 
 # ================================
 # DATABASE
@@ -58,12 +58,12 @@ def today():
     return date.today().isoformat()
 
 # ================================
-# DAILY RESET
+# DAILY RESET (IST MIDNIGHT)
 # ================================
 async def daily_reset_task():
     await client.wait_until_ready()
     while not client.is_closed():
-        now = datetime.now(tz=UTC)
+        now = datetime.now(IST)
         next_day = (now + timedelta(days=1)).replace(
             hour=0, minute=0, second=0, microsecond=0
         )
@@ -73,18 +73,14 @@ async def daily_reset_task():
         db.commit()
 
 # ================================
-# HOURLY 24H SYNC
+# HISTORY SYNC (LAST 24H)
 # ================================
-async def sync_channel_history():
+async def sync_last_24h():
     channel = client.get_channel(TARGET_CHANNEL_ID)
     if not channel:
         return
 
-    cutoff = datetime.now(tz=UTC) - timedelta(hours=SYNC_LOOKBACK_HOURS)
-
-    cursor.execute("DELETE FROM wins")
-    cursor.execute("DELETE FROM daily_messages")
-    db.commit()
+    cutoff = datetime.now(IST) - timedelta(hours=24)
 
     async for msg in channel.history(after=cutoff, limit=None):
         if not msg.author.bot:
@@ -93,7 +89,7 @@ async def sync_channel_history():
             VALUES (?, ?, 1)
             ON CONFLICT(user_id, msg_date)
             DO UPDATE SET count = count + 1
-            """, (msg.author.id, msg.created_at.date().isoformat()))
+            """, (msg.author.id, today()))
 
         for reaction in msg.reactions:
             if getattr(reaction.emoji, "id", None) == TARGET_EMOJI_ID:
@@ -108,14 +104,25 @@ async def sync_channel_history():
 
     db.commit()
 
-async def hourly_sync_task():
+# ================================
+# :55 IST HOURLY SYNC
+# ================================
+async def ist_55_sync_task():
     await client.wait_until_ready()
+
     while not client.is_closed():
+        now = datetime.now(IST)
+        next_run = now.replace(minute=55, second=0, microsecond=0)
+
+        if now.minute >= 55:
+            next_run += timedelta(hours=1)
+
+        await asyncio.sleep((next_run - now).total_seconds())
+
         try:
-            await sync_channel_history()
+            await sync_last_24h()
         except:
             pass
-        await asyncio.sleep(HOURLY_SYNC_INTERVAL)
 
 # ================================
 # EVENTS
@@ -125,7 +132,11 @@ async def on_message(message):
     if message.author.bot:
         return
 
-    # Track messages ONLY in target channel
+    # Ignore all channels except command channel
+    if message.channel.id != COMMAND_CHANNEL_ID:
+        return
+
+    # Track messages only in target channel
     if message.channel.id == TARGET_CHANNEL_ID:
         cursor.execute("""
         INSERT INTO daily_messages (user_id, msg_date, count)
@@ -135,12 +146,9 @@ async def on_message(message):
         """, (message.author.id, today()))
         db.commit()
 
-    # Ignore commands outside command channel
-    if message.channel.id != COMMAND_CHANNEL_ID:
-        return
-
-    # ================= COMMANDS =================
-
+    # ----------------------------
+    # !check_wins
+    # ----------------------------
     if message.content.lower().startswith("!check_wins"):
         target = message.mentions[0] if message.mentions else message.author
 
@@ -157,15 +165,18 @@ async def on_message(message):
 
         text = (
             f"🏆 **{target.display_name}** - `{wins} wins`\n"
-            f"📊 **Messages today:** `{msgs}`"
+            f"📊 Messages today: `{msgs}`"
             if target != message.author
             else
             f"🏆 **You** - `{wins} wins`\n"
-            f"📊 **Messages today:** `{msgs}`"
+            f"📊 Messages today: `{msgs}`"
         )
 
         await message.reply(text, mention_author=True)
 
+    # ----------------------------
+    # !winslb
+    # ----------------------------
     if message.content.lower() == "!winslb":
         cursor.execute("""
         SELECT user_id, win_count
@@ -176,11 +187,11 @@ async def on_message(message):
         rows = cursor.fetchall()
 
         if not rows:
-            await message.reply("📭 No wins yet.", mention_author=True)
+            await message.reply("📭 No wins yet today.", mention_author=True)
             return
 
         lines = []
-        for uid, count in rows:
+        for rank, (uid, count) in enumerate(rows, start=1):
             member = message.guild.get_member(uid)
             if not member:
                 try:
@@ -189,7 +200,7 @@ async def on_message(message):
                     member = None
 
             name = member.display_name if member else f"User {uid}"
-            lines.append(f"**{name}** - `{count} wins`")
+            lines.append(f"**{rank}. {name}** - `{count} wins`")
 
         await message.reply(
             "🏆 **Leaderboard (Last 24 Hours)**\n" + "\n".join(lines),
@@ -220,7 +231,7 @@ async def on_reaction_add(reaction, user):
 async def on_ready():
     print(f"✅ Bot logged in as {client.user}")
     client.loop.create_task(daily_reset_task())
-    client.loop.create_task(hourly_sync_task())
+    client.loop.create_task(ist_55_sync_task())
 
 # ================================
 # RUN
