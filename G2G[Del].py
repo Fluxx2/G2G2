@@ -19,7 +19,7 @@ TARGET_EMOJI_ID = 1443112156693397534
 DELETE_AFTER_SECONDS = 220
 CHECK_INTERVAL = 15
 MAX_MESSAGES_TO_CHECK = 20
-MAX_HISTORY_SCAN = 1000  # how far back check_wins scans
+MAX_HISTORY_SCAN = 1000
 
 # ================================
 # BOT SETUP
@@ -87,7 +87,7 @@ async def on_message(message):
 
     channel = client.get_channel(TARGET_CHANNEL_ID)
     if not channel:
-        await message.reply("❌ Target channel not found.")
+        await message.channel.send("❌ Target channel not found.")
         return
 
     wins = 0
@@ -95,13 +95,15 @@ async def on_message(message):
 
     async for msg in channel.history(limit=MAX_HISTORY_SCAN):
         for reaction in msg.reactions:
-            if reaction.emoji and getattr(reaction.emoji, "id", None) == TARGET_EMOJI_ID:
+            if getattr(reaction.emoji, "id", None) == TARGET_EMOJI_ID:
                 async for reactor in reaction.users():
                     if reactor.id == user.id:
                         wins += 1
                         break
 
-    await message.reply(f"🏆 **{user.display_name}**, you have **{wins} wins**!")
+    await message.channel.send(
+        f"🏆 **{user.display_name}**, you have **{wins} wins**!"
+    )
 
 # ================================
 # EVENTS
