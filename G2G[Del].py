@@ -117,7 +117,7 @@ async def on_message(message):
 
     # Reply safely (fallback if original message is gone)
     try:
-        await message.reply(response, mention_author=False)
+        await message.reply(response, mention_author=True)
     except HTTPException:
         await message.channel.send(response)
 
