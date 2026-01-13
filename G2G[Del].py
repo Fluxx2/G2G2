@@ -13,8 +13,8 @@ COMMAND_CHANNEL_ID = 1442370326116827259
 TARGET_EMOJI_ID = 1443112156693397534
 
 DB_FILE = "wins.db"
-BOT_DELETE_AFTER_SECONDS = 60
-BOT_CLEANUP_INTERVAL = 30
+BOT_DELETE_AFTER_SECONDS = 220
+BOT_CLEANUP_INTERVAL = 15
 
 IST = pytz.timezone("Asia/Kolkata")
 UTC = pytz.UTC
@@ -89,9 +89,10 @@ async def post_leaderboard(guild, title="🏆 **Leaderboard (Last 24 Hours)**"):
                 member = None
 
         name = member.display_name if member else f"User {uid}"
-        lines.append(f"**{rank}. {name}** - `{count} wins`")
+        lines.append(f"{rank}. {name} - `{count} wins`")
 
-    await channel.send(title + "\n" + " ".join(lines))
+    # ✅ Each user on its own line
+    await channel.send(title + "\n" + "\n".join(lines))
 
 # ================================
 # DAILY RESET (AUTO LB UPDATE)
