@@ -10,6 +10,7 @@ from discord.errors import HTTPException
 # CONFIG
 # ================================
 TARGET_CHANNEL_ID = 1442370325831487608
+COMMAND_CHANNEL_ID = 1442370326116827259
 TARGET_EMOJI_ID = 1443112156693397534
 
 DB_FILE = "wins.db"
@@ -120,6 +121,7 @@ async def on_message(message):
     if message.author.bot:
         return
 
+    # Track messages ONLY in target channel
     if message.channel.id == TARGET_CHANNEL_ID:
         cursor.execute("""
         INSERT INTO daily_messages (user_id, msg_date, count)
@@ -128,6 +130,12 @@ async def on_message(message):
         DO UPDATE SET count = count + 1
         """, (message.author.id, today()))
         db.commit()
+
+    # ❌ Ignore commands outside command channel
+    if message.channel.id != COMMAND_CHANNEL_ID:
+        return
+
+    # ================= COMMANDS =================
 
     if message.content.lower().startswith("!check_wins"):
         target = message.mentions[0] if message.mentions else message.author
@@ -154,7 +162,7 @@ async def on_message(message):
 
         await message.reply(text, mention_author=True)
 
-    if message.content.lower() == "!leaderboard":
+    if message.content.lower() == "!winslb":
         cursor.execute("""
         SELECT user_id, win_count
         FROM wins
