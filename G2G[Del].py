@@ -124,12 +124,12 @@ async def on_message(message):
         today_total = 0
 
     response = (
-        f"🏆 **{target_user.display_name}** has **{wins} wins**!\n"
-        f"📊 **Total wins done today by {target_user.display_name}:** `{today_total}`"
+        f"🏆 **Today {target_user.display_name} has Joined {wins} wins**!\n"
+        f"📊 **Total wins done today by {target_user.display_name}: {today_total}**"
         if target_user != message.author
         else
-        f"🏆 **You** have **{wins} wins**!\n"
-        f"📊 **Total wins done today:** `{today_total}`"
+        f"🏆 **You have joined {wins} wins**!\n"
+        f"📊 **Total wins done today: {today_total}**"
     )
 
     try:
