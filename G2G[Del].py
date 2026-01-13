@@ -4,7 +4,6 @@ import os
 import sqlite3
 from datetime import datetime, date, timedelta
 import pytz
-from discord.errors import HTTPException
 
 # ================================
 # CONFIG
@@ -15,6 +14,7 @@ TARGET_EMOJI_ID = 1443112156693397534
 
 DB_FILE = "wins.db"
 HOURLY_SYNC_INTERVAL = 3600  # 1 hour
+SYNC_LOOKBACK_HOURS = 24
 
 TOKEN = os.getenv("DISCORD_TOKEN_4")
 if not TOKEN:
@@ -73,14 +73,18 @@ async def daily_reset_task():
         db.commit()
 
 # ================================
-# HOURLY HISTORY SYNC
+# HOURLY 24H SYNC
 # ================================
 async def sync_channel_history():
     channel = client.get_channel(TARGET_CHANNEL_ID)
     if not channel:
         return
 
-    cutoff = datetime.now(tz=UTC) - timedelta(hours=1)
+    cutoff = datetime.now(tz=UTC) - timedelta(hours=SYNC_LOOKBACK_HOURS)
+
+    cursor.execute("DELETE FROM wins")
+    cursor.execute("DELETE FROM daily_messages")
+    db.commit()
 
     async for msg in channel.history(after=cutoff, limit=None):
         if not msg.author.bot:
@@ -89,7 +93,7 @@ async def sync_channel_history():
             VALUES (?, ?, 1)
             ON CONFLICT(user_id, msg_date)
             DO UPDATE SET count = count + 1
-            """, (msg.author.id, today()))
+            """, (msg.author.id, msg.created_at.date().isoformat()))
 
         for reaction in msg.reactions:
             if getattr(reaction.emoji, "id", None) == TARGET_EMOJI_ID:
@@ -131,7 +135,7 @@ async def on_message(message):
         """, (message.author.id, today()))
         db.commit()
 
-    # ❌ Ignore commands outside command channel
+    # Ignore commands outside command channel
     if message.channel.id != COMMAND_CHANNEL_ID:
         return
 
@@ -152,12 +156,12 @@ async def on_message(message):
         msgs = msgs[0] if msgs else 0
 
         text = (
-            f"🏆 **{target.display_name} joined {wins} wins today**\n"
-            f"📊 **Messages today: {msgs}**"
+            f"🏆 **{target.display_name}** - `{wins} wins`\n"
+            f"📊 **Messages today:** `{msgs}`"
             if target != message.author
             else
-            f"🏆 **You joined {wins} wins today**\n"
-            f"📊 **Messages today: {msgs}**"
+            f"🏆 **You** - `{wins} wins`\n"
+            f"📊 **Messages today:** `{msgs}`"
         )
 
         await message.reply(text, mention_author=True)
@@ -172,11 +176,11 @@ async def on_message(message):
         rows = cursor.fetchall()
 
         if not rows:
-            await message.reply("📭 No wins yet today.", mention_author=True)
+            await message.reply("📭 No wins yet.", mention_author=True)
             return
 
         lines = []
-        for i, (uid, count) in enumerate(rows, start=1):
+        for uid, count in rows:
             member = message.guild.get_member(uid)
             if not member:
                 try:
@@ -185,10 +189,10 @@ async def on_message(message):
                     member = None
 
             name = member.display_name if member else f"User {uid}"
-            lines.append(f"**{i}. {name}** — `{count}` wins")
+            lines.append(f"**{name}** - `{count} wins`")
 
         await message.reply(
-            "🏆 **Today’s Leaderboard**\n" + "\n".join(lines),
+            "🏆 **Leaderboard (Last 24 Hours)**\n" + "\n".join(lines),
             mention_author=True
         )
 
