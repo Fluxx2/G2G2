@@ -29,7 +29,6 @@ if not TOKEN:
 intents = discord.Intents.default()
 intents.message_content = True
 intents.reactions = True
-
 client = discord.Client(intents=intents)
 
 # ================================
@@ -54,6 +53,12 @@ CREATE TABLE IF NOT EXISTS daily_messages (
 )
 """)
 
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS processed_messages (
+    msg_id INTEGER PRIMARY KEY
+)
+""")
+
 db.commit()
 
 def today():
@@ -64,16 +69,13 @@ def today():
 # ================================
 async def daily_reset_task():
     await client.wait_until_ready()
-
     while not client.is_closed():
         now = datetime.now(IST)
-        next_midnight = (now + timedelta(days=1)).replace(
-            hour=0, minute=0, second=0, microsecond=0
-        )
+        next_midnight = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
         await asyncio.sleep((next_midnight - now).total_seconds())
-
         cursor.execute("DELETE FROM wins")
         cursor.execute("DELETE FROM daily_messages")
+        cursor.execute("DELETE FROM processed_messages")
         db.commit()
 
 # ================================
@@ -81,28 +83,29 @@ async def daily_reset_task():
 # ================================
 async def ist_55_sync_task():
     await client.wait_until_ready()
-    guild = client.guilds[0]
-
     while not client.is_closed():
         now = datetime.now(IST)
         next_run = now.replace(minute=55, second=0, microsecond=0)
         if now.minute >= 55:
             next_run += timedelta(hours=1)
-
         await asyncio.sleep((next_run - now).total_seconds())
-        await sync_last_24h()  # Only update DB, no posting
+        await sync_last_24h()  # Only DB update, no message
 
 # ================================
-# SYNC LAST 24 HOURS
+# SYNC LAST 24 HOURS (no double-count)
 # ================================
 async def sync_last_24h():
     channel = client.get_channel(TARGET_CHANNEL_ID)
     if not channel:
         return
-
     cutoff = datetime.now(UTC) - timedelta(hours=24)
 
     async for msg in channel.history(after=cutoff, limit=None):
+        # Skip already processed messages
+        cursor.execute("SELECT 1 FROM processed_messages WHERE msg_id = ?", (msg.id,))
+        if cursor.fetchone():
+            continue
+
         if not msg.author.bot:
             cursor.execute("""
             INSERT INTO daily_messages (user_id, msg_date, count)
@@ -121,6 +124,10 @@ async def sync_last_24h():
                         ON CONFLICT(user_id)
                         DO UPDATE SET win_count = win_count + 1
                         """, (user.id,))
+
+        # Mark message as processed
+        cursor.execute("INSERT OR IGNORE INTO processed_messages (msg_id) VALUES (?)", (msg.id,))
+
     db.commit()
 
 # ================================
@@ -128,7 +135,6 @@ async def sync_last_24h():
 # ================================
 async def delete_bot_messages_task():
     await client.wait_until_ready()
-
     while not client.is_closed():
         channel = client.get_channel(TARGET_CHANNEL_ID)
         if not channel:
@@ -136,7 +142,6 @@ async def delete_bot_messages_task():
             continue
 
         now = datetime.now(UTC)
-
         try:
             async for msg in channel.history(limit=50):
                 if msg.author.bot:
@@ -174,6 +179,7 @@ async def on_message(message):
     if message.channel.id != COMMAND_CHANNEL_ID:
         return
 
+    # !check_wins
     if message.content.lower().startswith("!check_wins"):
         target = message.mentions[0] if message.mentions else message.author
 
@@ -181,10 +187,7 @@ async def on_message(message):
         wins = cursor.fetchone()
         wins = wins[0] if wins else 0
 
-        cursor.execute("""
-        SELECT count FROM daily_messages
-        WHERE user_id = ? AND msg_date = ?
-        """, (target.id, today()))
+        cursor.execute("SELECT count FROM daily_messages WHERE user_id = ? AND msg_date = ?", (target.id, today()))
         msgs = cursor.fetchone()
         msgs = msgs[0] if msgs else 0
 
@@ -194,6 +197,7 @@ async def on_message(message):
             mention_author=True
         )
 
+    # !winslb
     if message.content.lower() == "!winslb":
         await post_leaderboard(message.guild)
 
@@ -215,17 +219,11 @@ async def on_reaction_add(reaction, user):
     db.commit()
 
 # ================================
-# LEADERBOARD POSTER (manual)
+# LEADERBOARD POSTER
 # ================================
 async def post_leaderboard(guild):
-    cursor.execute("""
-    SELECT user_id, win_count
-    FROM wins
-    ORDER BY win_count DESC
-    LIMIT 10
-    """)
+    cursor.execute("SELECT user_id, win_count FROM wins ORDER BY win_count DESC LIMIT 10")
     rows = cursor.fetchall()
-
     channel = client.get_channel(COMMAND_CHANNEL_ID)
     if not channel:
         return
@@ -236,17 +234,11 @@ async def post_leaderboard(guild):
 
     lines = []
     for rank, (uid, count) in enumerate(rows, start=1):
-        member = guild.get_member(uid)
-        if not member:
-            try:
-                member = await guild.fetch_member(uid)
-            except:
-                member = None
-
+        member = guild.get_member(uid) or await guild.fetch_member(uid)
         name = member.display_name if member else f"User {uid}"
         lines.append(f"{rank}. {name} - `{count} wins`")
 
-    await channel.send("🏆 **Leaderboard (Last 24h)**\n" + "\n".join(lines))
+    await channel.send("🏆 **Leaderboard (Last 24h)****\n" + "\n".join(lines))
 
 # ================================
 # READY
@@ -255,7 +247,7 @@ async def post_leaderboard(guild):
 async def on_ready():
     print(f"✅ Bot logged in as {client.user}")
 
-    # Immediately update DB (no LB message)
+    # Immediately update DB silently
     await sync_last_24h()
 
     # Start background tasks
