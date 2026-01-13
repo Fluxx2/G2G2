@@ -1,7 +1,7 @@
 import discord
 import asyncio
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 from discord.errors import DiscordServerError, HTTPException
 
@@ -35,6 +35,19 @@ intents.reactions = True
 client = discord.Client(intents=intents)
 
 UTC = pytz.UTC
+
+# ================================
+# HELPERS
+# ================================
+async def count_messages_today(channel):
+    start = datetime.now(tz=UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    total = 0
+
+    async for msg in channel.history(after=start, limit=None):
+        if not msg.author.bot:
+            total += 1
+
+    return total
 
 # ================================
 # BACKGROUND TASK
@@ -83,12 +96,7 @@ async def on_message(message):
     if not message.content.lower().startswith("!check_wins"):
         return
 
-    # Determine target user
-    if message.mentions:
-        target_user = message.mentions[0]
-    else:
-        target_user = message.author
-
+    target_user = message.mentions[0] if message.mentions else message.author
     channel = client.get_channel(TARGET_CHANNEL_ID)
     if not channel:
         return
@@ -109,13 +117,21 @@ async def on_message(message):
     except DiscordServerError:
         pass
 
+    # ✅ NEW: total wins today
+    try:
+        total_today = await count_messages_today(channel)
+    except DiscordServerError:
+        total_today = 0
+
     response = (
-        f"🏆 **{target_user.display_name}** has **{wins} wins**!"
+        f"🏆 **{target_user.display_name}** has **{wins} wins**!\n"
+        f"📊 **Total wins today:** `{total_today}`"
         if target_user != message.author
-        else f"🏆 **You** have **{wins} wins**!"
+        else
+        f"🏆 **You** have **{wins} wins**!\n"
+        f"📊 **Total wins today:** `{total_today}`"
     )
 
-    # Reply safely (fallback if original message is gone)
     try:
         await message.reply(response, mention_author=True)
     except HTTPException:
