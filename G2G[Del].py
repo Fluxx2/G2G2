@@ -62,48 +62,64 @@ async def delete_old_bot_messages():
                                 await msg.delete()
                                 await asyncio.sleep(0.4)
                             except HTTPException:
-                                continue
+                                pass
 
                 except DiscordServerError:
-                    print(f"⚠️ Discord 503 in channel {channel_id}")
                     await asyncio.sleep(15)
 
-        except Exception as e:
-            print(f"🔥 Background task error: {e}")
+        except Exception:
             await asyncio.sleep(20)
 
         await asyncio.sleep(CHECK_INTERVAL)
 
 # ================================
-# COMMAND: !check_wins
+# COMMAND: !check_wins [@user]
 # ================================
 @client.event
 async def on_message(message):
     if message.author.bot:
         return
 
-    if message.content.lower() != "!check_wins":
+    if not message.content.lower().startswith("!check_wins"):
         return
+
+    # Determine target user
+    if message.mentions:
+        target_user = message.mentions[0]
+    else:
+        target_user = message.author
 
     channel = client.get_channel(TARGET_CHANNEL_ID)
     if not channel:
-        await message.channel.send("❌ Target channel not found.")
         return
 
     wins = 0
-    user = message.author
 
-    async for msg in channel.history(limit=MAX_HISTORY_SCAN):
-        for reaction in msg.reactions:
-            if getattr(reaction.emoji, "id", None) == TARGET_EMOJI_ID:
-                async for reactor in reaction.users():
-                    if reactor.id == user.id:
-                        wins += 1
-                        break
+    try:
+        async for msg in channel.history(limit=MAX_HISTORY_SCAN):
+            for reaction in msg.reactions:
+                if getattr(reaction.emoji, "id", None) == TARGET_EMOJI_ID:
+                    try:
+                        async for reactor in reaction.users():
+                            if reactor.id == target_user.id:
+                                wins += 1
+                                break
+                    except DiscordServerError:
+                        continue
+    except DiscordServerError:
+        pass
 
-    await message.channel.send(
-        f"🏆 **{user.display_name}**, you have **{wins} wins**!"
+    response = (
+        f"🏆 **{target_user.display_name}** has **{wins} wins**!"
+        if target_user != message.author
+        else f"🏆 **You** have **{wins} wins**!"
     )
+
+    # Reply safely (fallback if original message is gone)
+    try:
+        await message.reply(response, mention_author=False)
+    except HTTPException:
+        await message.channel.send(response)
 
 # ================================
 # EVENTS
