@@ -34,9 +34,9 @@ client = discord.Client(intents=intents)
 
 AGGREGATE_MESSAGE_ID = None
 emoji_state = "⏳"
-MANAGING_MESSAGE = False
 
 code_entries = []  # oldest → newest
+message_lock = asyncio.Lock()  # 🔒 HARD GUARANTEE
 
 # ================================
 # HELPERS
@@ -55,11 +55,15 @@ def generate_all_variants(code):
             out.append(v)
     if code in out:
         out.remove(code)
-    return [code] + out[:MAX_VARIANTS - 1]
+    out.insert(0, code)
+    return out[:MAX_VARIANTS]
 
 def relative_from(ts):
     return f"<t:{int(ts.timestamp())}:R>"
 
+# ================================
+# MESSAGE BUILD (FORMAT FIXED)
+# ================================
 def build_message():
     if not code_entries:
         return "no codes as of rn"
@@ -67,42 +71,56 @@ def build_message():
     lines = []
     total = len(code_entries)
 
-    for i, e in enumerate(reversed(code_entries)):
-        rank = total - i
-        code = e["codes"][0]
+    # newest → oldest (oldest = #1)
+    for idx, entry in enumerate(reversed(code_entries)):
+        rank = total - idx
+
+        if len(entry["codes"]) == 1:
+            # 1)#`   CODE   `
+            codestr = f"#`   {entry['codes'][0]}   `"
+        else:
+            # 1)`   CODE   `  `   CODE   `
+            codestr = "  ".join(f"`   {c}   `" for c in entry["codes"])
+
         timer = (
-            relative_from(e["created_at"] + timedelta(seconds=MAX_AGE_SECONDS))
-            if e["show_timer"]
+            relative_from(entry["created_at"] + timedelta(seconds=MAX_AGE_SECONDS))
+            if entry["show_timer"]
             else ""
         )
-        lines.append(f"{rank}) `{code}` {timer}")
+
+        lines.append(f"{rank}){codestr} {timer}")
 
     return f"{emoji_state}\n\n" + "\n".join(lines)
 
 # ================================
-# MESSAGE CONTROL (ONE MESSAGE)
+# SINGLE MESSAGE CONTROL (SAFE)
 # ================================
-async def get_message():
-    global AGGREGATE_MESSAGE_ID, MANAGING_MESSAGE
+async def get_or_create_message():
+    global AGGREGATE_MESSAGE_ID
 
-    channel = client.get_channel(TARGET_CHANNEL_ID)
-    if not channel:
-        return None
+    async with message_lock:
+        channel = client.get_channel(TARGET_CHANNEL_ID)
+        if not channel:
+            return None
 
-    if AGGREGATE_MESSAGE_ID:
-        try:
-            return await channel.fetch_message(AGGREGATE_MESSAGE_ID)
-        except discord.NotFound:
-            AGGREGATE_MESSAGE_ID = None
+        if AGGREGATE_MESSAGE_ID:
+            try:
+                return await channel.fetch_message(AGGREGATE_MESSAGE_ID)
+            except discord.NotFound:
+                AGGREGATE_MESSAGE_ID = None
 
-    MANAGING_MESSAGE = True
-    msg = await channel.send("no codes as of rn")
-    AGGREGATE_MESSAGE_ID = msg.id
-    MANAGING_MESSAGE = False
-    return msg
+        # double-check history (absolute safety)
+        async for msg in channel.history(limit=5):
+            if msg.author.id == client.user.id:
+                AGGREGATE_MESSAGE_ID = msg.id
+                return msg
+
+        msg = await channel.send("no codes as of rn")
+        AGGREGATE_MESSAGE_ID = msg.id
+        return msg
 
 async def update_message():
-    msg = await get_message()
+    msg = await get_or_create_message()
     if not msg:
         return
     await msg.edit(content=build_message())
@@ -138,9 +156,9 @@ async def on_ready():
 
     channel = client.get_channel(TARGET_CHANNEL_ID)
     if channel:
-        async for m in channel.history(limit=100):
-            if m.author.id == client.user.id:
-                await m.delete()
+        async for msg in channel.history(limit=100):
+            if msg.author.id == client.user.id:
+                await msg.delete()
 
     AGGREGATE_MESSAGE_ID = None
     await update_message()
@@ -191,9 +209,6 @@ async def on_message_edit(before, after):
 @client.event
 async def on_message_delete(message):
     global AGGREGATE_MESSAGE_ID
-
-    if MANAGING_MESSAGE:
-        return
 
     if message.channel.id == SOURCE_CHANNEL_ID:
         code_entries[:] = [e for e in code_entries if e["source_id"] != message.id]
