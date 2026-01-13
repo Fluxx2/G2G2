@@ -2,7 +2,7 @@ import discord
 import asyncio
 import os
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from itertools import product
 
 # ================================
@@ -10,7 +10,8 @@ from itertools import product
 # ================================
 SOURCE_CHANNEL_ID = 1442370325831487608
 TARGET_CHANNEL_ID = 1449692284596523068
-MAX_AGE_SECONDS = 240
+
+MAX_AGE_SECONDS = 225
 TOGGLE_INTERVAL = 28
 EDIT_THROTTLE = 1.6
 
@@ -20,8 +21,7 @@ NO_TOGGLE_USER_IDS = {
 }
 
 VARIANT_ROLE_ID = 1460446818407022785
-
-MAX_VARIANTS = 16  # SAFETY CAP
+MAX_VARIANTS = 16
 
 # ================================
 # BOT SETUP
@@ -35,24 +35,20 @@ intents.message_content = True
 
 client = discord.Client(intents=intents)
 
-mirrored_messages = {}
-code_data = {}
+AGGREGATE_MESSAGE_ID = None
+STANDBY_MESSAGE_ID = None
+
+emoji_state = "⏳"
+
+# oldest → newest
+code_entries = []
 
 # ================================
 # HELPERS
 # ================================
-def is_fresh(msg: discord.Message) -> bool:
-    age = (datetime.now(timezone.utc) - msg.created_at).total_seconds()
-    return age <= MAX_AGE_SECONDS
-
-def discord_relative_timestamp(seconds_from_now: int) -> str:
-    unix = int(datetime.now(timezone.utc).timestamp()) + seconds_from_now
-    return f"<t:{unix}:R>"
-
 def has_variant_role(member: discord.Member) -> bool:
     return any(role.id == VARIANT_ROLE_ID for role in member.roles)
 
-# Ambiguous characters
 AMBIGUOUS_SETS = {
     "I": ["I", "l"],
     "l": ["l", "I"],
@@ -75,75 +71,121 @@ def generate_all_variants(code: str) -> list[str]:
 
     return unique[:MAX_VARIANTS]
 
-def build_content(source_id: int) -> str:
-    data = code_data[source_id]
-    codes = data["codes"]
+def relative_from(ts: datetime) -> str:
+    return f"<t:{int(ts.timestamp())}:R>"
 
-    if len(codes) == 1:
-        header = f"# `     {codes[0]}     `"
-    else:
-        header = "\n".join(
-            f"# {i}) `   {code}   `"
-            for i, code in enumerate(codes, start=1)
+def build_message() -> str:
+    lines = []
+
+    for i, entry in enumerate(code_entries, start=1):
+        code_text = (
+            entry["codes"][0]
+            if len(entry["codes"]) == 1
+            else " / ".join(entry["codes"])
         )
 
-    if not data["show_timer"]:
-        return header
+        timer = (
+            relative_from(entry["created_at"] + timedelta(seconds=MAX_AGE_SECONDS))
+            if entry["show_timer"]
+            else ""
+        )
 
-    return f"{header}\n{data['emoji']} {data['timer']}"
+        lines.append(f"# {i}) `{code_text}` {timer}")
 
-async def expire_mirrored_message(source_id: int):
-    await asyncio.sleep(MAX_AGE_SECONDS)
-
-    msg = mirrored_messages.pop(source_id, None)
-    code_data.pop(source_id, None)
-
-    if msg:
-        try:
-            await msg.delete()
-        except (discord.NotFound, discord.HTTPException):
-            pass
+    return f"{emoji_state}\n\n" + "\n".join(lines)
 
 # ================================
-# EMOJI TOGGLE LOOP
+# CORE UPDATE LOGIC
+# ================================
+async def update_aggregate():
+    global AGGREGATE_MESSAGE_ID, STANDBY_MESSAGE_ID
+
+    channel = client.get_channel(TARGET_CHANNEL_ID)
+    if not channel:
+        return
+
+    # =====================
+    # NO CODES → STANDBY
+    # =====================
+    if not code_entries:
+        if AGGREGATE_MESSAGE_ID:
+            try:
+                msg = await channel.fetch_message(AGGREGATE_MESSAGE_ID)
+                await msg.delete()
+            except discord.NotFound:
+                pass
+            AGGREGATE_MESSAGE_ID = None
+
+        if STANDBY_MESSAGE_ID is None:
+            standby = await channel.send("no codes as of rn")
+            STANDBY_MESSAGE_ID = standby.id
+
+        return
+
+    # =====================
+    # CODES EXIST → AGGREGATE
+    # =====================
+    if STANDBY_MESSAGE_ID:
+        try:
+            msg = await channel.fetch_message(STANDBY_MESSAGE_ID)
+            await msg.delete()
+        except discord.NotFound:
+            pass
+        STANDBY_MESSAGE_ID = None
+
+    content = build_message()
+
+    if AGGREGATE_MESSAGE_ID is None:
+        msg = await channel.send(content)
+        AGGREGATE_MESSAGE_ID = msg.id
+        return
+
+    try:
+        msg = await channel.fetch_message(AGGREGATE_MESSAGE_ID)
+        await msg.edit(content=content)
+    except discord.NotFound:
+        msg = await channel.send(content)
+        AGGREGATE_MESSAGE_ID = msg.id
+
+# ================================
+# LOOPS
 # ================================
 async def emoji_toggle_loop():
+    global emoji_state
     await client.wait_until_ready()
 
     while not client.is_closed():
-        for source_id, msg in list(mirrored_messages.items()):
-            data = code_data.get(source_id)
-
-            if not data or not data["show_timer"]:
-                continue
-
-            data["emoji"] = "🔚" if data["emoji"] == "⏳" else "⏳"
-
-            try:
-                await msg.edit(content=build_content(source_id))
-                await asyncio.sleep(EDIT_THROTTLE)
-            except (discord.NotFound, discord.HTTPException):
-                pass
-
+        if code_entries:
+            emoji_state = "🔚" if emoji_state == "⏳" else "⏳"
+            await update_aggregate()
         await asyncio.sleep(TOGGLE_INTERVAL)
+
+async def expiry_loop():
+    await client.wait_until_ready()
+
+    while not client.is_closed():
+        now = datetime.now(timezone.utc)
+
+        while code_entries and (now - code_entries[0]["created_at"]).total_seconds() >= MAX_AGE_SECONDS:
+            code_entries.pop(0)
+
+        await update_aggregate()
+        await asyncio.sleep(1)
 
 # ================================
 # EVENTS
 # ================================
 @client.event
 async def on_ready():
-    print(f"✅ Code Bot logged in as {client.user}")
+    print(f"✅ Logged in as {client.user}")
     client.loop.create_task(emoji_toggle_loop())
+    client.loop.create_task(expiry_loop())
 
 @client.event
 async def on_message(message):
     if message.author.bot:
         return
-
     if message.channel.id != SOURCE_CHANNEL_ID:
-        return
-
-    if not is_fresh(message):
         return
 
     match = re.search(r"\b[a-zA-Z0-9]{5,6}\b", message.content)
@@ -152,76 +194,62 @@ async def on_message(message):
 
     code = match.group(0)
 
-    # Variant logic (ROLE)
-    use_variants = has_variant_role(message.author)
-
-    # Timer / emoji logic (USER ID)
-    show_timer = message.author.id not in NO_TOGGLE_USER_IDS
-
-    codes = [code] if not use_variants else generate_all_variants(code)
-    timer = discord_relative_timestamp(MAX_AGE_SECONDS) if show_timer else ""
-
-    code_data[message.id] = {
-        "codes": codes,
-        "timer": timer,
-        "emoji": "⏳",
-        "show_timer": show_timer
-    }
-
-    target_channel = client.get_channel(TARGET_CHANNEL_ID)
-    if not target_channel:
-        return
-
-    mirrored_messages[message.id] = await target_channel.send(
-        build_content(message.id)
+    codes = (
+        [code]
+        if not has_variant_role(message.author)
+        else generate_all_variants(code)
     )
 
-    client.loop.create_task(expire_mirrored_message(message.id))
+    code_entries.append({
+        "source_id": message.id,
+        "codes": codes,
+        "created_at": message.created_at,
+        "show_timer": message.author.id not in NO_TOGGLE_USER_IDS
+    })
+
+    await update_aggregate()
 
 @client.event
 async def on_message_edit(before, after):
     if after.channel.id != SOURCE_CHANNEL_ID:
         return
 
-    if not is_fresh(after):
-        return
-
-    data = code_data.get(after.id)
-    msg = mirrored_messages.get(after.id)
-
-    if not data or not msg:
-        return
-
     match = re.search(r"\b[a-zA-Z0-9]{5,6}\b", after.content)
     if not match:
         return
 
-    new_code = match.group(0)
+    for entry in code_entries:
+        if entry["source_id"] == after.id:
+            code = match.group(0)
+            entry["codes"] = (
+                [code]
+                if not has_variant_role(after.author)
+                else generate_all_variants(code)
+            )
+            break
 
-    data["codes"] = (
-        [new_code]
-        if not has_variant_role(after.author)
-        else generate_all_variants(new_code)
-    )
-
-    try:
-        await msg.edit(content=build_content(after.id))
-    except (discord.NotFound, discord.HTTPException):
-        pass
+    await update_aggregate()
 
 @client.event
 async def on_message_delete(message):
-    if message.channel.id != SOURCE_CHANNEL_ID:
+    global AGGREGATE_MESSAGE_ID, STANDBY_MESSAGE_ID, code_entries
+
+    if message.channel.id == SOURCE_CHANNEL_ID:
+        code_entries = [
+            e for e in code_entries
+            if e["source_id"] != message.id
+        ]
+        await update_aggregate()
         return
 
-    msg = mirrored_messages.pop(message.id, None)
-    code_data.pop(message.id, None)
+    if message.id == AGGREGATE_MESSAGE_ID:
+        AGGREGATE_MESSAGE_ID = None
+        await update_aggregate()
+        return
 
-    if msg:
-        try:
-            await msg.delete()
-        except (discord.NotFound, discord.HTTPException):
-            pass
+    if message.id == STANDBY_MESSAGE_ID:
+        STANDBY_MESSAGE_ID = None
+        await update_aggregate()
 
 # ================================
 # RUN
