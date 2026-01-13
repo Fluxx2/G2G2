@@ -125,7 +125,7 @@ async def on_message(message):
 
     response = (
         f"🏆 **{target_user.display_name}** has **{wins} wins**!\n"
-        f"📊 **Total wins today:** `{today_total}`"
+        f"📊 **Total wins done today by {target_user.display_name}:** `{today_total}`"
         if target_user != message.author
         else
         f"🏆 **You** have **{wins} wins**!\n"
