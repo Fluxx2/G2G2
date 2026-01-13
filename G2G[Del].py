@@ -13,9 +13,13 @@ CHANNEL_IDS = {
     1442370325831487608
 }
 
+TARGET_CHANNEL_ID = 1442370325831487608
+TARGET_EMOJI_ID = 1443112156693397534
+
 DELETE_AFTER_SECONDS = 220
 CHECK_INTERVAL = 15
 MAX_MESSAGES_TO_CHECK = 20
+MAX_HISTORY_SCAN = 1000  # how far back check_wins scans
 
 # ================================
 # BOT SETUP
@@ -25,6 +29,9 @@ if not TOKEN:
     raise RuntimeError("DISCORD_TOKEN_4 not set")
 
 intents = discord.Intents.default()
+intents.message_content = True
+intents.reactions = True
+
 client = discord.Client(intents=intents)
 
 UTC = pytz.UTC
@@ -55,21 +62,46 @@ async def delete_old_bot_messages():
                                 await msg.delete()
                                 await asyncio.sleep(0.4)
                             except HTTPException:
-                                # message already deleted / perms issue
                                 continue
 
-                except DiscordServerError as e:
-                    # Discord API hiccup
-                    print(f"⚠️ Discord 503 in channel {channel_id}, retrying soon")
-                    await asyncio.sleep(15)  # backoff
-                    continue
+                except DiscordServerError:
+                    print(f"⚠️ Discord 503 in channel {channel_id}")
+                    await asyncio.sleep(15)
 
         except Exception as e:
-            # Catch ALL unexpected crashes so task never dies
             print(f"🔥 Background task error: {e}")
             await asyncio.sleep(20)
 
         await asyncio.sleep(CHECK_INTERVAL)
+
+# ================================
+# COMMAND: !check_wins
+# ================================
+@client.event
+async def on_message(message):
+    if message.author.bot:
+        return
+
+    if message.content.lower() != "!check_wins":
+        return
+
+    channel = client.get_channel(TARGET_CHANNEL_ID)
+    if not channel:
+        await message.reply("❌ Target channel not found.")
+        return
+
+    wins = 0
+    user = message.author
+
+    async for msg in channel.history(limit=MAX_HISTORY_SCAN):
+        for reaction in msg.reactions:
+            if reaction.emoji and getattr(reaction.emoji, "id", None) == TARGET_EMOJI_ID:
+                async for reactor in reaction.users():
+                    if reactor.id == user.id:
+                        wins += 1
+                        break
+
+    await message.reply(f"🏆 **{user.display_name}**, you have **{wins} wins**!")
 
 # ================================
 # EVENTS
