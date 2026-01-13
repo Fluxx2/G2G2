@@ -1,7 +1,7 @@
 import discord
 import asyncio
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 import pytz
 from discord.errors import DiscordServerError, HTTPException
 
@@ -39,15 +39,15 @@ UTC = pytz.UTC
 # ================================
 # HELPERS
 # ================================
-async def count_messages_today(channel):
+async def count_user_messages_today(channel, user):
     start = datetime.now(tz=UTC).replace(hour=0, minute=0, second=0, microsecond=0)
-    total = 0
+    count = 0
 
     async for msg in channel.history(after=start, limit=None):
-        if not msg.author.bot:
-            total += 1
+        if not msg.author.bot and msg.author.id == user.id:
+            count += 1
 
-    return total
+    return count
 
 # ================================
 # BACKGROUND TASK
@@ -117,19 +117,19 @@ async def on_message(message):
     except DiscordServerError:
         pass
 
-    # ✅ NEW: total wins today
+    # ✅ USER-ONLY total wins today
     try:
-        total_today = await count_messages_today(channel)
+        today_total = await count_user_messages_today(channel, target_user)
     except DiscordServerError:
-        total_today = 0
+        today_total = 0
 
     response = (
         f"🏆 **{target_user.display_name}** has **{wins} wins**!\n"
-        f"📊 **Total wins today:** `{total_today}`"
+        f"📊 **Total wins today:** `{today_total}`"
         if target_user != message.author
         else
         f"🏆 **You** have **{wins} wins**!\n"
-        f"📊 **Total wins today:** `{total_today}`"
+        f"📊 **Total wins today:** `{today_total}`"
     )
 
     try:
