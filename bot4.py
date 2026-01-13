@@ -37,7 +37,6 @@ client = discord.Client(intents=intents)
 
 AGGREGATE_MESSAGE_ID = None
 STANDBY_MESSAGE_ID = None
-
 emoji_state = "⏳"
 
 # oldest → newest
@@ -74,10 +73,17 @@ def generate_all_variants(code: str) -> list[str]:
 def relative_from(ts: datetime) -> str:
     return f"<t:{int(ts.timestamp())}:R>"
 
+# ================================
+# MESSAGE BUILD (UPSIDE-DOWN)
+# ================================
 def build_message() -> str:
     lines = []
+    total = len(code_entries)
 
-    for i, entry in enumerate(code_entries, start=1):
+    # newest → oldest
+    for idx, entry in enumerate(reversed(code_entries)):
+        rank = total - idx  # oldest ends up as #1
+
         code_text = (
             entry["codes"][0]
             if len(entry["codes"]) == 1
@@ -90,7 +96,7 @@ def build_message() -> str:
             else ""
         )
 
-        lines.append(f"# {i}) `{code_text}` {timer}")
+        lines.append(f"# {rank}) `{code_text}` {timer}")
 
     return f"{emoji_state}\n\n" + "\n".join(lines)
 
@@ -177,7 +183,23 @@ async def expiry_loop():
 # ================================
 @client.event
 async def on_ready():
+    global AGGREGATE_MESSAGE_ID, STANDBY_MESSAGE_ID
+
     print(f"✅ Logged in as {client.user}")
+
+    # 🔥 CLEANUP: delete ALL bot messages in target channel
+    channel = client.get_channel(TARGET_CHANNEL_ID)
+    if channel:
+        async for msg in channel.history(limit=100):
+            if msg.author.id == client.user.id:
+                try:
+                    await msg.delete()
+                except discord.HTTPException:
+                    pass
+
+    AGGREGATE_MESSAGE_ID = None
+    STANDBY_MESSAGE_ID = None
+
     client.loop.create_task(emoji_toggle_loop())
     client.loop.create_task(expiry_loop())
 
