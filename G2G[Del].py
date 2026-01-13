@@ -60,46 +60,10 @@ def today():
     return date.today().isoformat()
 
 # ================================
-# LEADERBOARD POSTER
-# ================================
-async def post_leaderboard(guild, title="🏆 **Leaderboard (Last 24 Hours)**"):
-    cursor.execute("""
-    SELECT user_id, win_count
-    FROM wins
-    ORDER BY win_count DESC
-    LIMIT 10
-    """)
-    rows = cursor.fetchall()
-
-    channel = client.get_channel(COMMAND_CHANNEL_ID)
-    if not channel:
-        return
-
-    if not rows:
-        await channel.send("📭 **Leaderboard Reset — No wins yet.**")
-        return
-
-    lines = []
-    for rank, (uid, count) in enumerate(rows, start=1):
-        member = guild.get_member(uid)
-        if not member:
-            try:
-                member = await guild.fetch_member(uid)
-            except:
-                member = None
-
-        name = member.display_name if member else f"User {uid}"
-        lines.append(f"{rank}. {name} - `{count} wins`")
-
-    # Each user on its own line
-    await channel.send(title + "\n" + "\n".join(lines))
-
-# ================================
-# DAILY RESET (AUTO LB UPDATE)
+# DAILY RESET
 # ================================
 async def daily_reset_task():
     await client.wait_until_ready()
-    guild = client.guilds[0]
 
     while not client.is_closed():
         now = datetime.now(IST)
@@ -111,8 +75,6 @@ async def daily_reset_task():
         cursor.execute("DELETE FROM wins")
         cursor.execute("DELETE FROM daily_messages")
         db.commit()
-
-        await post_leaderboard(guild, "🔄 **Leaderboard Reset (New Day)**")
 
 # ================================
 # IST :55 HOURLY SYNC (24H)
@@ -128,12 +90,12 @@ async def ist_55_sync_task():
             next_run += timedelta(hours=1)
 
         await asyncio.sleep((next_run - now).total_seconds())
-        await sync_last_24h(guild)
+        await sync_last_24h()  # Only update DB, no posting
 
 # ================================
 # SYNC LAST 24 HOURS
 # ================================
-async def sync_last_24h(guild):
+async def sync_last_24h():
     channel = client.get_channel(TARGET_CHANNEL_ID)
     if not channel:
         return
@@ -160,8 +122,6 @@ async def sync_last_24h(guild):
                         DO UPDATE SET win_count = win_count + 1
                         """, (user.id,))
     db.commit()
-
-    await post_leaderboard(guild)
 
 # ================================
 # BOT MESSAGE CLEANUP
@@ -200,6 +160,7 @@ async def on_message(message):
     if message.author.bot:
         return
 
+    # Only track messages in TARGET_CHANNEL_ID
     if message.channel.id == TARGET_CHANNEL_ID:
         cursor.execute("""
         INSERT INTO daily_messages (user_id, msg_date, count)
@@ -209,6 +170,7 @@ async def on_message(message):
         """, (message.author.id, today()))
         db.commit()
 
+    # Commands only in COMMAND_CHANNEL_ID
     if message.channel.id != COMMAND_CHANNEL_ID:
         return
 
@@ -253,15 +215,48 @@ async def on_reaction_add(reaction, user):
     db.commit()
 
 # ================================
+# LEADERBOARD POSTER (manual)
+# ================================
+async def post_leaderboard(guild):
+    cursor.execute("""
+    SELECT user_id, win_count
+    FROM wins
+    ORDER BY win_count DESC
+    LIMIT 10
+    """)
+    rows = cursor.fetchall()
+
+    channel = client.get_channel(COMMAND_CHANNEL_ID)
+    if not channel:
+        return
+
+    if not rows:
+        await channel.send("📭 **Leaderboard is empty.**")
+        return
+
+    lines = []
+    for rank, (uid, count) in enumerate(rows, start=1):
+        member = guild.get_member(uid)
+        if not member:
+            try:
+                member = await guild.fetch_member(uid)
+            except:
+                member = None
+
+        name = member.display_name if member else f"User {uid}"
+        lines.append(f"{rank}. {name} - `{count} wins`")
+
+    await channel.send("🏆 **Leaderboard (Last 24h)**\n" + "\n".join(lines))
+
+# ================================
 # READY
 # ================================
 @client.event
 async def on_ready():
     print(f"✅ Bot logged in as {client.user}")
-    guild = client.guilds[0]
 
-    # ✅ Immediately sync last 24 hours and post LB after startup
-    client.loop.create_task(sync_last_24h(guild))
+    # Immediately update DB (no LB message)
+    await sync_last_24h()
 
     # Start background tasks
     client.loop.create_task(daily_reset_task())
