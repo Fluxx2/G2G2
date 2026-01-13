@@ -36,7 +36,7 @@ AGGREGATE_MESSAGE_ID = None
 emoji_state = "⏳"
 
 code_entries = []  # oldest → newest
-message_lock = asyncio.Lock()  # 🔒 HARD GUARANTEE
+message_lock = asyncio.Lock()
 
 # ================================
 # HELPERS
@@ -62,7 +62,7 @@ def relative_from(ts):
     return f"<t:{int(ts.timestamp())}:R>"
 
 # ================================
-# MESSAGE BUILD (FORMAT FIXED)
+# MESSAGE BUILD (FINAL FORMAT)
 # ================================
 def build_message():
     if not code_entries:
@@ -76,10 +76,8 @@ def build_message():
         rank = total - idx
 
         if len(entry["codes"]) == 1:
-            # 1)#`   CODE   `
-            codestr = f"#`   {entry['codes'][0]}   `"
+            codestr = f"`   {entry['codes'][0]}   `"
         else:
-            # 1)`   CODE   `  `   CODE   `
             codestr = "  ".join(f"`   {c}   `" for c in entry["codes"])
 
         timer = (
@@ -88,7 +86,7 @@ def build_message():
             else ""
         )
 
-        lines.append(f"{rank}){codestr} {timer}")
+        lines.append(f"#{rank}) {codestr} {timer}")
 
     return f"{emoji_state}\n\n" + "\n".join(lines)
 
@@ -109,7 +107,6 @@ async def get_or_create_message():
             except discord.NotFound:
                 AGGREGATE_MESSAGE_ID = None
 
-        # double-check history (absolute safety)
         async for msg in channel.history(limit=5):
             if msg.author.id == client.user.id:
                 AGGREGATE_MESSAGE_ID = msg.id
@@ -120,10 +117,22 @@ async def get_or_create_message():
         return msg
 
 async def update_message():
+    global AGGREGATE_MESSAGE_ID
     msg = await get_or_create_message()
     if not msg:
         return
-    await msg.edit(content=build_message())
+
+    try:
+        await msg.edit(content=build_message())
+    except discord.NotFound:
+        # Message disappeared → retry once
+        AGGREGATE_MESSAGE_ID = None
+        msg = await get_or_create_message()
+        if msg:
+            try:
+                await msg.edit(content=build_message())
+            except discord.NotFound:
+                pass
 
 # ================================
 # LOOPS
@@ -132,19 +141,25 @@ async def emoji_loop():
     global emoji_state
     await client.wait_until_ready()
     while True:
-        if code_entries:
-            emoji_state = "🔚" if emoji_state == "⏳" else "⏳"
-            await update_message()
-        await asyncio.sleep(TOGGLE_INTERVAL)
+        try:
+            if code_entries:
+                emoji_state = "🔚" if emoji_state == "⏳" else "⏳"
+                await update_message()
+            await asyncio.sleep(TOGGLE_INTERVAL)
+        except Exception:
+            await asyncio.sleep(1)
 
 async def expiry_loop():
     await client.wait_until_ready()
     while True:
-        now = datetime.now(timezone.utc)
-        while code_entries and (now - code_entries[0]["created_at"]).total_seconds() >= MAX_AGE_SECONDS:
-            code_entries.pop(0)
-        await update_message()
-        await asyncio.sleep(1)
+        try:
+            now = datetime.now(timezone.utc)
+            while code_entries and (now - code_entries[0]["created_at"]).total_seconds() >= MAX_AGE_SECONDS:
+                code_entries.pop(0)
+            await update_message()
+            await asyncio.sleep(1)
+        except Exception:
+            await asyncio.sleep(1)
 
 # ================================
 # EVENTS
