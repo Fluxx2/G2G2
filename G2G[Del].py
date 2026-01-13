@@ -164,12 +164,12 @@ async def on_message(message):
         msgs = msgs[0] if msgs else 0
 
         text = (
-            f"🏆 **{target.display_name}** - `{wins} wins`\n"
-            f"📊 Messages today: `{msgs}`"
+            f"🏆 **{target.display_name} joined** - `{wins} wins`\n"
+            f"📊 wins done today: `{msgs}`"
             if target != message.author
             else
-            f"🏆 **You** - `{wins} wins`\n"
-            f"📊 Messages today: `{msgs}`"
+            f"🏆 **You joined** - `{wins} wins`\n"
+            f"📊 wins done today: `{msgs}`"
         )
 
         await message.reply(text, mention_author=True)
