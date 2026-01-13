@@ -86,7 +86,7 @@ def build_message():
             else ""
         )
 
-        lines.append(f"#{rank}) {codestr} {timer}")
+        lines.append(f"# {rank}) {codestr} {timer}")
 
     return f"{emoji_state}\n\n" + "\n".join(lines)
 
@@ -238,3 +238,4 @@ async def on_message_delete(message):
 # RUN
 # ================================
 client.run(TOKEN)
+
