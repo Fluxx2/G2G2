@@ -19,6 +19,8 @@ NO_TOGGLE_USER_IDS = {
     906546198754775082
 }
 
+VARIANT_ROLE_ID = 1460446818407022785
+
 MAX_VARIANTS = 16  # SAFETY CAP
 
 # ================================
@@ -47,6 +49,9 @@ def discord_relative_timestamp(seconds_from_now: int) -> str:
     unix = int(datetime.now(timezone.utc).timestamp()) + seconds_from_now
     return f"<t:{unix}:R>"
 
+def has_variant_role(member: discord.Member) -> bool:
+    return any(role.id == VARIANT_ROLE_ID for role in member.roles)
+
 # Ambiguous characters
 AMBIGUOUS_SETS = {
     "I": ["I", "l"],
@@ -74,7 +79,6 @@ def build_content(source_id: int) -> str:
     data = code_data[source_id]
     codes = data["codes"]
 
-    # Single code → no numbering
     if len(codes) == 1:
         header = f"# `     {codes[0]}     `"
     else:
@@ -83,7 +87,7 @@ def build_content(source_id: int) -> str:
             for i, code in enumerate(codes, start=1)
         )
 
-    if data["only_code"]:
+    if not data["show_timer"]:
         return header
 
     return f"{header}\n{data['emoji']} {data['timer']}"
@@ -110,7 +114,7 @@ async def emoji_toggle_loop():
         for source_id, msg in list(mirrored_messages.items()):
             data = code_data.get(source_id)
 
-            if not data or data["only_code"]:
+            if not data or not data["show_timer"]:
                 continue
 
             data["emoji"] = "🔚" if data["emoji"] == "⏳" else "⏳"
@@ -147,16 +151,21 @@ async def on_message(message):
         return
 
     code = match.group(0)
-    only_code = message.author.id in NO_TOGGLE_USER_IDS
 
-    codes = [code] if only_code else generate_all_variants(code)
-    timer = discord_relative_timestamp(MAX_AGE_SECONDS) if not only_code else ""
+    # Variant logic (ROLE)
+    use_variants = has_variant_role(message.author)
+
+    # Timer / emoji logic (USER ID)
+    show_timer = message.author.id not in NO_TOGGLE_USER_IDS
+
+    codes = [code] if not use_variants else generate_all_variants(code)
+    timer = discord_relative_timestamp(MAX_AGE_SECONDS) if show_timer else ""
 
     code_data[message.id] = {
         "codes": codes,
         "timer": timer,
         "emoji": "⏳",
-        "only_code": only_code
+        "show_timer": show_timer
     }
 
     target_channel = client.get_channel(TARGET_CHANNEL_ID)
@@ -191,7 +200,7 @@ async def on_message_edit(before, after):
 
     data["codes"] = (
         [new_code]
-        if data["only_code"]
+        if not has_variant_role(after.author)
         else generate_all_variants(new_code)
     )
 
