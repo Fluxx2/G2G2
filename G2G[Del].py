@@ -129,7 +129,7 @@ async def on_message(message):
         if target_user != message.author
         else
         f"🏆 **You** have **{wins} wins**!\n"
-        f"📊 **Total wins today:** `{today_total}`"
+        f"📊 **Total wins done today:** `{today_total}`"
     )
 
     try:
