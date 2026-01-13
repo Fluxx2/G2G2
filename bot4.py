@@ -10,7 +10,6 @@ from itertools import product
 # ================================
 SOURCE_CHANNEL_ID = 1442370325831487608
 TARGET_CHANNEL_ID = 1449692284596523068
-
 MAX_AGE_SECONDS = 225
 TOGGLE_INTERVAL = 28
 
@@ -31,79 +30,60 @@ if not TOKEN:
 
 intents = discord.Intents.default()
 intents.message_content = True
-
 client = discord.Client(intents=intents)
 
 AGGREGATE_MESSAGE_ID = None
 emoji_state = "⏳"
+MANAGING_MESSAGE = False
 
-# oldest → newest
-code_entries = []
+code_entries = []  # oldest → newest
 
 # ================================
 # HELPERS
 # ================================
-def has_variant_role(member: discord.Member) -> bool:
-    return any(role.id == VARIANT_ROLE_ID for role in member.roles)
+def has_variant_role(member):
+    return any(r.id == VARIANT_ROLE_ID for r in member.roles)
 
-AMBIGUOUS_SETS = {
-    "I": ["I", "l"],
-    "l": ["l", "I"],
-}
+AMBIGUOUS_SETS = {"I": ["I", "l"], "l": ["l", "I"]}
 
-def generate_all_variants(code: str) -> list[str]:
+def generate_all_variants(code):
     pools = [AMBIGUOUS_SETS.get(c, [c]) for c in code]
-    variants = ["".join(p) for p in product(*pools)]
+    out = []
+    for p in product(*pools):
+        v = "".join(p)
+        if v not in out:
+            out.append(v)
+    if code in out:
+        out.remove(code)
+    return [code] + out[:MAX_VARIANTS - 1]
 
-    unique = []
-    for v in variants:
-        if v not in unique:
-            unique.append(v)
-
-    if code in unique:
-        unique.remove(code)
-    unique.insert(0, code)
-
-    return unique[:MAX_VARIANTS]
-
-def relative_from(ts: datetime) -> str:
+def relative_from(ts):
     return f"<t:{int(ts.timestamp())}:R>"
 
-# ================================
-# MESSAGE BUILD (ONE MESSAGE ONLY)
-# ================================
-def build_message() -> str:
+def build_message():
     if not code_entries:
         return "no codes as of rn"
 
     lines = []
     total = len(code_entries)
 
-    # newest → oldest (oldest = #1)
-    for idx, entry in enumerate(reversed(code_entries)):
-        rank = total - idx
-
-        code_text = (
-            entry["codes"][0]
-            if len(entry["codes"]) == 1
-            else " / ".join(entry["codes"])
-        )
-
+    for i, e in enumerate(reversed(code_entries)):
+        rank = total - i
+        code = e["codes"][0]
         timer = (
-            relative_from(entry["created_at"] + timedelta(seconds=MAX_AGE_SECONDS))
-            if entry["show_timer"]
+            relative_from(e["created_at"] + timedelta(seconds=MAX_AGE_SECONDS))
+            if e["show_timer"]
             else ""
         )
-
-        lines.append(f"{rank}) `{code_text}` {timer}")
+        lines.append(f"{rank}) `{code}` {timer}")
 
     return f"{emoji_state}\n\n" + "\n".join(lines)
 
 # ================================
-# CORE UPDATE (EDIT ONLY)
+# MESSAGE CONTROL (ONE MESSAGE)
 # ================================
-async def ensure_message():
-    global AGGREGATE_MESSAGE_ID
+async def get_message():
+    global AGGREGATE_MESSAGE_ID, MANAGING_MESSAGE
 
     channel = client.get_channel(TARGET_CHANNEL_ID)
     if not channel:
@@ -115,28 +95,25 @@ async def ensure_message():
         except discord.NotFound:
             AGGREGATE_MESSAGE_ID = None
 
+    MANAGING_MESSAGE = True
     msg = await channel.send("no codes as of rn")
     AGGREGATE_MESSAGE_ID = msg.id
+    MANAGING_MESSAGE = False
     return msg
 
 async def update_message():
-    msg = await ensure_message()
+    msg = await get_message()
     if not msg:
         return
-
-    try:
-        await msg.edit(content=build_message())
-    except discord.HTTPException:
-        pass
+    await msg.edit(content=build_message())
 
 # ================================
 # LOOPS
 # ================================
-async def emoji_toggle_loop():
+async def emoji_loop():
     global emoji_state
     await client.wait_until_ready()
-
-    while not client.is_closed():
+    while True:
         if code_entries:
             emoji_state = "🔚" if emoji_state == "⏳" else "⏳"
             await update_message()
@@ -144,13 +121,10 @@ async def emoji_toggle_loop():
 
 async def expiry_loop():
     await client.wait_until_ready()
-
-    while not client.is_closed():
+    while True:
         now = datetime.now(timezone.utc)
-
         while code_entries and (now - code_entries[0]["created_at"]).total_seconds() >= MAX_AGE_SECONDS:
             code_entries.pop(0)
-
         await update_message()
         await asyncio.sleep(1)
 
@@ -160,48 +134,34 @@ async def expiry_loop():
 @client.event
 async def on_ready():
     global AGGREGATE_MESSAGE_ID
-
     print(f"✅ Logged in as {client.user}")
 
-    # 🔥 DELETE ALL OLD BOT MESSAGES
     channel = client.get_channel(TARGET_CHANNEL_ID)
     if channel:
-        async for msg in channel.history(limit=100):
-            if msg.author.id == client.user.id:
-                try:
-                    await msg.delete()
-                except discord.HTTPException:
-                    pass
+        async for m in channel.history(limit=100):
+            if m.author.id == client.user.id:
+                await m.delete()
 
     AGGREGATE_MESSAGE_ID = None
-
     await update_message()
 
-    client.loop.create_task(emoji_toggle_loop())
+    client.loop.create_task(emoji_loop())
     client.loop.create_task(expiry_loop())
 
 @client.event
 async def on_message(message):
-    if message.author.bot:
-        return
-    if message.channel.id != SOURCE_CHANNEL_ID:
+    if message.author.bot or message.channel.id != SOURCE_CHANNEL_ID:
         return
 
     match = re.search(r"\b[a-zA-Z0-9]{5,6}\b", message.content)
     if not match:
         return
 
-    code = match.group(0)
-
-    codes = (
-        [code]
-        if not has_variant_role(message.author)
-        else generate_all_variants(code)
-    )
-
     code_entries.append({
         "source_id": message.id,
-        "codes": codes,
+        "codes": generate_all_variants(match.group(0))
+        if has_variant_role(message.author)
+        else [match.group(0)],
         "created_at": message.created_at,
         "show_timer": message.author.id not in NO_TOGGLE_USER_IDS
     })
@@ -217,13 +177,12 @@ async def on_message_edit(before, after):
     if not match:
         return
 
-    for entry in code_entries:
-        if entry["source_id"] == after.id:
-            code = match.group(0)
-            entry["codes"] = (
-                [code]
-                if not has_variant_role(after.author)
-                else generate_all_variants(code)
+    for e in code_entries:
+        if e["source_id"] == after.id:
+            e["codes"] = (
+                generate_all_variants(match.group(0))
+                if has_variant_role(after.author)
+                else [match.group(0)]
             )
             break
 
@@ -231,18 +190,16 @@ async def on_message_edit(before, after):
 
 @client.event
 async def on_message_delete(message):
-    global AGGREGATE_MESSAGE_ID, code_entries
+    global AGGREGATE_MESSAGE_ID
 
-    # source deleted → remove code
+    if MANAGING_MESSAGE:
+        return
+
     if message.channel.id == SOURCE_CHANNEL_ID:
-        code_entries = [
-            e for e in code_entries
-            if e["source_id"] != message.id
-        ]
+        code_entries[:] = [e for e in code_entries if e["source_id"] != message.id]
         await update_message()
         return
 
-    # aggregate deleted → recreate
     if message.id == AGGREGATE_MESSAGE_ID:
         AGGREGATE_MESSAGE_ID = None
         await update_message()
