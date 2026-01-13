@@ -13,7 +13,7 @@ TARGET_CHANNEL_ID = 1442370325831487608
 TARGET_EMOJI_ID = 1443112156693397534
 
 DB_FILE = "wins.db"
-LEADERBOARD_LIMIT = 10
+HOURLY_SYNC_INTERVAL = 3600  # 1 hour
 
 TOKEN = os.getenv("DISCORD_TOKEN_4")
 if not TOKEN:
@@ -51,47 +51,45 @@ CREATE TABLE IF NOT EXISTS daily_messages (
 )
 """)
 
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS meta (
-    key TEXT PRIMARY KEY,
-    value TEXT
-)
-""")
-
 db.commit()
 
 def today():
     return date.today().isoformat()
 
 # ================================
-# DAILY RESET TASK
+# DAILY RESET
 # ================================
 async def daily_reset_task():
     await client.wait_until_ready()
-
     while not client.is_closed():
         now = datetime.now(tz=UTC)
-        tomorrow = (now + timedelta(days=1)).replace(
+        next_day = (now + timedelta(days=1)).replace(
             hour=0, minute=0, second=0, microsecond=0
         )
-        await asyncio.sleep((tomorrow - now).total_seconds())
-
+        await asyncio.sleep((next_day - now).total_seconds())
         cursor.execute("DELETE FROM wins")
+        cursor.execute("DELETE FROM daily_messages")
         db.commit()
-        print("🔁 Daily wins reset")
 
 # ================================
-# ONE-TIME HISTORY SYNC
+# HOURLY HISTORY SYNC
 # ================================
-async def initial_sync():
-    await client.wait_until_ready()
+async def sync_channel_history():
     channel = client.get_channel(TARGET_CHANNEL_ID)
     if not channel:
         return
 
-    print("🔄 Running one-time history sync...")
+    cutoff = datetime.now(tz=UTC) - timedelta(hours=1)
 
-    async for msg in channel.history(limit=500):
+    async for msg in channel.history(after=cutoff, limit=None):
+        if not msg.author.bot:
+            cursor.execute("""
+            INSERT INTO daily_messages (user_id, msg_date, count)
+            VALUES (?, ?, 1)
+            ON CONFLICT(user_id, msg_date)
+            DO UPDATE SET count = count + 1
+            """, (msg.author.id, today()))
+
         for reaction in msg.reactions:
             if getattr(reaction.emoji, "id", None) == TARGET_EMOJI_ID:
                 async for user in reaction.users():
@@ -102,8 +100,17 @@ async def initial_sync():
                         ON CONFLICT(user_id)
                         DO UPDATE SET win_count = win_count + 1
                         """, (user.id,))
+
     db.commit()
-    print("✅ History sync complete")
+
+async def hourly_sync_task():
+    await client.wait_until_ready()
+    while not client.is_closed():
+        try:
+            await sync_channel_history()
+        except:
+            pass
+        await asyncio.sleep(HOURLY_SYNC_INTERVAL)
 
 # ================================
 # EVENTS
@@ -113,7 +120,6 @@ async def on_message(message):
     if message.author.bot:
         return
 
-    # Track daily messages live
     if message.channel.id == TARGET_CHANNEL_ID:
         cursor.execute("""
         INSERT INTO daily_messages (user_id, msg_date, count)
@@ -123,7 +129,6 @@ async def on_message(message):
         """, (message.author.id, today()))
         db.commit()
 
-    # !check_wins [@user]
     if message.content.lower().startswith("!check_wins"):
         target = message.mentions[0] if message.mentions else message.author
 
@@ -135,28 +140,27 @@ async def on_message(message):
         SELECT count FROM daily_messages
         WHERE user_id = ? AND msg_date = ?
         """, (target.id, today()))
-        daily = cursor.fetchone()
-        daily = daily[0] if daily else 0
+        msgs = cursor.fetchone()
+        msgs = msgs[0] if msgs else 0
 
         text = (
             f"🏆 **{target.display_name} joined {wins} wins today**\n"
-            f"📊 **Messages today: {daily}**"
+            f"📊 **Messages today: {msgs}**"
             if target != message.author
             else
             f"🏆 **You joined {wins} wins today**\n"
-            f"📊 **Messages today: {daily}**"
+            f"📊 **Messages today: {msgs}**"
         )
 
         await message.reply(text, mention_author=True)
 
-    # !winslb
-    if message.content.lower() == "!winslb":
+    if message.content.lower() == "!leaderboard":
         cursor.execute("""
         SELECT user_id, win_count
         FROM wins
         ORDER BY win_count DESC
-        LIMIT ?
-        """, (LEADERBOARD_LIMIT,))
+        LIMIT 10
+        """)
         rows = cursor.fetchall()
 
         if not rows:
@@ -166,6 +170,12 @@ async def on_message(message):
         lines = []
         for i, (uid, count) in enumerate(rows, start=1):
             member = message.guild.get_member(uid)
+            if not member:
+                try:
+                    member = await message.guild.fetch_member(uid)
+                except:
+                    member = None
+
             name = member.display_name if member else f"User {uid}"
             lines.append(f"**{i}. {name}** — `{count}` wins")
 
@@ -198,7 +208,7 @@ async def on_reaction_add(reaction, user):
 async def on_ready():
     print(f"✅ Bot logged in as {client.user}")
     client.loop.create_task(daily_reset_task())
-    client.loop.create_task(initial_sync())
+    client.loop.create_task(hourly_sync_task())
 
 # ================================
 # RUN
