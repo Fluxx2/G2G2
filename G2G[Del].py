@@ -238,7 +238,7 @@ async def post_leaderboard(guild):
         name = member.display_name if member else f"User {uid}"
         lines.append(f"{rank}. {name} - `{count} wins`")
 
-    await channel.send("🏆 **Leaderboard (Last 24h)****\n" + "\n".join(lines))
+    await channel.send("🏆 **Leaderboard (Last 24h)**\n" + "\n".join(lines))
 
 # ================================
 # READY
