@@ -4,7 +4,6 @@ import os
 import sqlite3
 from datetime import datetime, timedelta, date
 import pytz
-from discord.errors import HTTPException
 
 # ================================
 # CONFIG
@@ -14,8 +13,8 @@ COMMAND_CHANNEL_ID = 1442370326116827259
 TARGET_EMOJI_ID = 1443112156693397534
 
 DB_FILE = "wins.db"
-BOT_DELETE_AFTER_SECONDS = 220
-BOT_CLEANUP_INTERVAL = 19
+BOT_DELETE_AFTER_SECONDS = 60
+BOT_CLEANUP_INTERVAL = 30
 
 IST = pytz.timezone("Asia/Kolkata")
 UTC = pytz.UTC
@@ -61,25 +60,65 @@ def today():
     return date.today().isoformat()
 
 # ================================
-# DAILY RESET
+# LEADERBOARD POSTER
+# ================================
+async def post_leaderboard(guild, title="🏆 **Leaderboard (Last 24 Hours)**"):
+    cursor.execute("""
+    SELECT user_id, win_count
+    FROM wins
+    ORDER BY win_count DESC
+    LIMIT 10
+    """)
+    rows = cursor.fetchall()
+
+    channel = client.get_channel(COMMAND_CHANNEL_ID)
+    if not channel:
+        return
+
+    if not rows:
+        await channel.send("📭 **Leaderboard Reset — No wins yet.**")
+        return
+
+    lines = []
+    for rank, (uid, count) in enumerate(rows, start=1):
+        member = guild.get_member(uid)
+        if not member:
+            try:
+                member = await guild.fetch_member(uid)
+            except:
+                member = None
+
+        name = member.display_name if member else f"User {uid}"
+        lines.append(f"**{rank}. {name}** - `{count} wins`")
+
+    await channel.send(title + "\n" + " ".join(lines))
+
+# ================================
+# DAILY RESET (AUTO LB UPDATE)
 # ================================
 async def daily_reset_task():
     await client.wait_until_ready()
+    guild = client.guilds[0]
+
     while not client.is_closed():
         now = datetime.now(IST)
         next_midnight = (now + timedelta(days=1)).replace(
             hour=0, minute=0, second=0, microsecond=0
         )
         await asyncio.sleep((next_midnight - now).total_seconds())
+
         cursor.execute("DELETE FROM wins")
         cursor.execute("DELETE FROM daily_messages")
         db.commit()
 
+        await post_leaderboard(guild, "🔄 **Leaderboard Reset (New Day)**")
+
 # ================================
-# IST :55 HOURLY SYNC (LAST 24H)
+# IST :55 HOURLY SYNC (24H)
 # ================================
 async def ist_55_sync_task():
     await client.wait_until_ready()
+    guild = client.guilds[0]
 
     while not client.is_closed():
         now = datetime.now(IST)
@@ -115,6 +154,8 @@ async def ist_55_sync_task():
                             DO UPDATE SET win_count = win_count + 1
                             """, (user.id,))
         db.commit()
+
+        await post_leaderboard(guild)
 
 # ================================
 # BOT MESSAGE CLEANUP
@@ -179,42 +220,14 @@ async def on_message(message):
         msgs = cursor.fetchone()
         msgs = msgs[0] if msgs else 0
 
-        text = (
-            f"🏆 **{target.display_name} - `{wins} wins`**\n"
-            f"📊 Messages today: `{msgs}`"
-        )
-
-        await message.reply(text, mention_author=True)
-
-    if message.content.lower() == "!winslb":
-        cursor.execute("""
-        SELECT user_id, win_count
-        FROM wins
-        ORDER BY win_count DESC
-        LIMIT 10
-        """)
-        rows = cursor.fetchall()
-
-        if not rows:
-            await message.reply("📭 No wins yet.", mention_author=True)
-            return
-
-        lines = []
-        for rank, (uid, count) in enumerate(rows, start=1):
-            member = message.guild.get_member(uid)
-            if not member:
-                try:
-                    member = await message.guild.fetch_member(uid)
-                except:
-                    member = None
-
-            name = member.display_name if member else f"User {uid}"
-            lines.append(f"**{rank}. {name}** - `{count} wins`")
-
         await message.reply(
-            "🏆 **Leaderboard (Last 24 Hours)**\n" + "\n".join(lines),
+            f"🏆 **{target.display_name} - `{wins} wins`**\n"
+            f"📊 Messages today: `{msgs}`",
             mention_author=True
         )
+
+    if message.content.lower() == "!winslb":
+        await post_leaderboard(message.guild)
 
 @client.event
 async def on_reaction_add(reaction, user):
