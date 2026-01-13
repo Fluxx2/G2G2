@@ -13,8 +13,8 @@ COMMAND_CHANNEL_ID = 1442370326116827259
 TARGET_EMOJI_ID = 1443112156693397534
 
 DB_FILE = "wins.db"
-BOT_DELETE_AFTER_SECONDS = 220
-BOT_CLEANUP_INTERVAL = 15
+BOT_DELETE_AFTER_SECONDS = 60
+BOT_CLEANUP_INTERVAL = 30
 
 IST = pytz.timezone("Asia/Kolkata")
 UTC = pytz.UTC
@@ -91,7 +91,7 @@ async def post_leaderboard(guild, title="🏆 **Leaderboard (Last 24 Hours)**"):
         name = member.display_name if member else f"User {uid}"
         lines.append(f"{rank}. {name} - `{count} wins`")
 
-    # ✅ Each user on its own line
+    # Each user on its own line
     await channel.send(title + "\n" + "\n".join(lines))
 
 # ================================
@@ -128,35 +128,40 @@ async def ist_55_sync_task():
             next_run += timedelta(hours=1)
 
         await asyncio.sleep((next_run - now).total_seconds())
+        await sync_last_24h(guild)
 
-        channel = client.get_channel(TARGET_CHANNEL_ID)
-        if not channel:
-            continue
+# ================================
+# SYNC LAST 24 HOURS
+# ================================
+async def sync_last_24h(guild):
+    channel = client.get_channel(TARGET_CHANNEL_ID)
+    if not channel:
+        return
 
-        cutoff = datetime.now(UTC) - timedelta(hours=24)
+    cutoff = datetime.now(UTC) - timedelta(hours=24)
 
-        async for msg in channel.history(after=cutoff, limit=None):
-            if not msg.author.bot:
-                cursor.execute("""
-                INSERT INTO daily_messages (user_id, msg_date, count)
-                VALUES (?, ?, 1)
-                ON CONFLICT(user_id, msg_date)
-                DO UPDATE SET count = count + 1
-                """, (msg.author.id, today()))
+    async for msg in channel.history(after=cutoff, limit=None):
+        if not msg.author.bot:
+            cursor.execute("""
+            INSERT INTO daily_messages (user_id, msg_date, count)
+            VALUES (?, ?, 1)
+            ON CONFLICT(user_id, msg_date)
+            DO UPDATE SET count = count + 1
+            """, (msg.author.id, today()))
 
-            for reaction in msg.reactions:
-                if getattr(reaction.emoji, "id", None) == TARGET_EMOJI_ID:
-                    async for user in reaction.users():
-                        if not user.bot:
-                            cursor.execute("""
-                            INSERT INTO wins (user_id, win_count)
-                            VALUES (?, 1)
-                            ON CONFLICT(user_id)
-                            DO UPDATE SET win_count = win_count + 1
-                            """, (user.id,))
-        db.commit()
+        for reaction in msg.reactions:
+            if getattr(reaction.emoji, "id", None) == TARGET_EMOJI_ID:
+                async for user in reaction.users():
+                    if not user.bot:
+                        cursor.execute("""
+                        INSERT INTO wins (user_id, win_count)
+                        VALUES (?, 1)
+                        ON CONFLICT(user_id)
+                        DO UPDATE SET win_count = win_count + 1
+                        """, (user.id,))
+    db.commit()
 
-        await post_leaderboard(guild)
+    await post_leaderboard(guild)
 
 # ================================
 # BOT MESSAGE CLEANUP
@@ -253,6 +258,12 @@ async def on_reaction_add(reaction, user):
 @client.event
 async def on_ready():
     print(f"✅ Bot logged in as {client.user}")
+    guild = client.guilds[0]
+
+    # ✅ Immediately sync last 24 hours and post LB after startup
+    client.loop.create_task(sync_last_24h(guild))
+
+    # Start background tasks
     client.loop.create_task(daily_reset_task())
     client.loop.create_task(ist_55_sync_task())
     client.loop.create_task(delete_bot_messages_task())
