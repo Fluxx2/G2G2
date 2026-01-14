@@ -11,7 +11,7 @@ from itertools import product
 SOURCE_CHANNEL_ID = 1442370325831487608
 TARGET_CHANNEL_ID = 1449692284596523068
 
-MAX_AGE_SECONDS = 225
+MAX_AGE_SECONDS = 240
 TOGGLE_INTERVAL = 28
 EXPIRY_CHECK_INTERVAL = 3
 MAX_EDIT_AGE_SECONDS = 55 * 60
@@ -257,3 +257,4 @@ async def on_message_delete(message):
 # RUN
 # ================================
 client.run(TOKEN)
+
