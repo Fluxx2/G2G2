@@ -11,7 +11,9 @@ from itertools import product
 SOURCE_CHANNEL_ID = 1442370325831487608
 TARGET_CHANNEL_ID = 1449692284596523068
 
-MAX_AGE_SECONDS = 240
+DISPLAY_TIMER_SECONDS = 240   # what users see
+REMOVE_AFTER_SECONDS = 224    # actual removal time
+
 TOGGLE_INTERVAL = 28
 EXPIRY_CHECK_INTERVAL = 3
 MAX_EDIT_AGE_SECONDS = 55 * 60
@@ -77,6 +79,7 @@ def build_message():
     lines = []
     total = len(code_entries)
 
+    # newest at top, oldest at bottom
     for idx, entry in enumerate(reversed(code_entries)):
         rank = total - idx
 
@@ -86,7 +89,10 @@ def build_message():
             codestr = "  ".join(f"`   {c}   `" for c in entry["codes"])
 
         timer = (
-            relative_from(entry["source_created_at"] + timedelta(seconds=MAX_AGE_SECONDS))
+            relative_from(
+                entry["source_created_at"]
+                + timedelta(seconds=DISPLAY_TIMER_SECONDS)
+            )
             if entry["show_timer"]
             else ""
         )
@@ -96,7 +102,7 @@ def build_message():
     return f"{emoji_state}\n\n" + "\n".join(lines)
 
 # ================================
-# MESSAGE CONTROL (ROTATION SAFE)
+# MESSAGE CONTROL
 # ================================
 async def get_or_create_message():
     global AGGREGATE_MESSAGE_ID, AGGREGATE_MESSAGE_CREATED_AT
@@ -110,21 +116,14 @@ async def get_or_create_message():
             try:
                 msg = await channel.fetch_message(AGGREGATE_MESSAGE_ID)
                 age = (datetime.now(timezone.utc) - msg.created_at).total_seconds()
-                if age >= MAX_EDIT_AGE_SECONDS:
-                    await msg.delete()
-                    AGGREGATE_MESSAGE_ID = None
-                    AGGREGATE_MESSAGE_CREATED_AT = None
-                else:
+                if age < MAX_EDIT_AGE_SECONDS:
                     return msg
+                await msg.delete()
             except discord.NotFound:
-                AGGREGATE_MESSAGE_ID = None
-                AGGREGATE_MESSAGE_CREATED_AT = None
+                pass
 
-        async for msg in channel.history(limit=5):
-            if msg.author.id == client.user.id:
-                AGGREGATE_MESSAGE_ID = msg.id
-                AGGREGATE_MESSAGE_CREATED_AT = msg.created_at
-                return msg
+            AGGREGATE_MESSAGE_ID = None
+            AGGREGATE_MESSAGE_CREATED_AT = None
 
         msg = await channel.send("no codes as of rn")
         AGGREGATE_MESSAGE_ID = msg.id
@@ -149,7 +148,7 @@ async def update_message(force=False):
         last_rendered_content = None
 
 # ================================
-# LOOPS (OPTIMIZED)
+# LOOPS
 # ================================
 async def emoji_loop():
     global emoji_state
@@ -168,7 +167,8 @@ async def expiry_loop():
         before = len(code_entries)
         code_entries[:] = [
             e for e in code_entries
-            if (now - e["source_created_at"]).total_seconds() < MAX_AGE_SECONDS
+            if (now - e["source_created_at"]).total_seconds()
+            < REMOVE_AFTER_SECONDS
         ]
 
         if len(code_entries) != before:
@@ -257,4 +257,3 @@ async def on_message_delete(message):
 # RUN
 # ================================
 client.run(TOKEN)
-
