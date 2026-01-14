@@ -95,14 +95,13 @@ async def ist_55_sync_task():
         await sync_today_from_scratch()
 
 # ================================
-# SYNC TODAY (NO DOUBLE COUNT)
+# SYNC TODAY (SAFE)
 # ================================
 async def sync_today_from_scratch():
     channel = client.get_channel(TARGET_CHANNEL_ID)
     if not channel:
         return
 
-    # FULL REBUILD (fixes deleted messages issue)
     cursor.execute("DELETE FROM wins")
     cursor.execute("DELETE FROM daily_messages")
     db.commit()
@@ -121,15 +120,24 @@ async def sync_today_from_scratch():
         """, (msg.author.id, today()))
 
         for reaction in msg.reactions:
-            if getattr(reaction.emoji, "id", None) == TARGET_EMOJI_ID:
+            if getattr(reaction.emoji, "id", None) != TARGET_EMOJI_ID:
+                continue
+
+            try:
                 async for user in reaction.users():
-                    if not user.bot:
-                        cursor.execute("""
-                        INSERT INTO wins (user_id, win_count)
-                        VALUES (?, 1)
-                        ON CONFLICT(user_id)
-                        DO UPDATE SET win_count = win_count + 1
-                        """, (user.id,))
+                    if user.bot:
+                        continue
+
+                    cursor.execute("""
+                    INSERT INTO wins (user_id, win_count)
+                    VALUES (?, 1)
+                    ON CONFLICT(user_id)
+                    DO UPDATE SET win_count = win_count + 1
+                    """, (user.id,))
+
+            except discord.NotFound:
+                # Message or reaction deleted mid-iteration
+                continue
 
     db.commit()
 
