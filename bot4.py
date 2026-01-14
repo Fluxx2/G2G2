@@ -11,11 +11,10 @@ from itertools import product
 SOURCE_CHANNEL_ID = 1442370325831487608
 TARGET_CHANNEL_ID = 1449692284596523068
 
-MAX_AGE_SECONDS = 240
-TOGGLE_INTERVAL = 18
+MAX_AGE_SECONDS = 225
+TOGGLE_INTERVAL = 28
 EXPIRY_CHECK_INTERVAL = 3
-
-MAX_EDIT_AGE_SECONDS = 55 * 60  # rotate before Discord 1h edit limit
+MAX_EDIT_AGE_SECONDS = 55 * 60
 
 NO_TOGGLE_USER_IDS = {
     1252645184777359391,
@@ -87,7 +86,7 @@ def build_message():
             codestr = "  ".join(f"`   {c}   `" for c in entry["codes"])
 
         timer = (
-            relative_from(entry["created_at"] + timedelta(seconds=MAX_AGE_SECONDS))
+            relative_from(entry["source_created_at"] + timedelta(seconds=MAX_AGE_SECONDS))
             if entry["show_timer"]
             else ""
         )
@@ -165,13 +164,14 @@ async def expiry_loop():
     await client.wait_until_ready()
     while True:
         now = datetime.now(timezone.utc)
-        changed = False
 
-        while code_entries and (now - code_entries[0]["created_at"]).total_seconds() >= MAX_AGE_SECONDS:
-            code_entries.pop(0)
-            changed = True
+        before = len(code_entries)
+        code_entries[:] = [
+            e for e in code_entries
+            if (now - e["source_created_at"]).total_seconds() < MAX_AGE_SECONDS
+        ]
 
-        if changed:
+        if len(code_entries) != before:
             await update_message(force=True)
 
         await asyncio.sleep(EXPIRY_CHECK_INTERVAL)
@@ -212,7 +212,7 @@ async def on_message(message):
         "codes": generate_all_variants(match.group(0))
         if has_variant_role(message.author)
         else [match.group(0)],
-        "created_at": message.created_at,
+        "source_created_at": message.created_at,
         "show_timer": message.author.id not in NO_TOGGLE_USER_IDS
     })
 
@@ -257,5 +257,3 @@ async def on_message_delete(message):
 # RUN
 # ================================
 client.run(TOKEN)
-
-
