@@ -22,10 +22,10 @@ IST = pytz.timezone("Asia/Kolkata")
 UTC = pytz.UTC
 
 # ================================
-# IGNORE SPECIFIC BOTS
+# IGNORE SPECIFIC WEBHOOKS
 # ================================
-IGNORED_BOT_IDS = {
-    1463699794286346315,
+IGNORED_WEBHOOK_IDS = {
+    1463699794286346315,  # replace with your webhook ID(s)
     222222222222222222,
 }
 
@@ -119,7 +119,7 @@ async def sync_today_from_scratch():
     cutoff = ist_midnight_utc()
 
     async for msg in channel.history(after=cutoff, limit=None):
-        if msg.author.bot and msg.author.id in IGNORED_BOT_IDS:
+        if msg.webhook_id in IGNORED_WEBHOOK_IDS:
             continue
 
         cursor.execute("""
@@ -135,16 +135,12 @@ async def sync_today_from_scratch():
 
             try:
                 async for user in reaction.users():
-                    if user.bot and user.id in IGNORED_BOT_IDS:
-                        continue
-
                     cursor.execute("""
                     INSERT INTO wins (user_id, win_count)
                     VALUES (?, 1)
                     ON CONFLICT(user_id)
                     DO UPDATE SET win_count = win_count + 1
                     """, (user.id,))
-
             except discord.NotFound:
                 continue
 
@@ -166,7 +162,6 @@ async def delete_bot_messages_task():
             async for msg in channel.history(limit=50):
                 if msg.author.id == client.user.id:
 
-                    # 🔹 AUTO-REACT WITH BOTH EMOJIS
                     try:
                         await msg.add_reaction(discord.Object(id=TARGET_EMOJI_ID))
                         await msg.add_reaction(discord.Object(id=SECOND_EMOJI_ID))
@@ -190,7 +185,7 @@ async def delete_bot_messages_task():
 # ================================
 @client.event
 async def on_message(message):
-    if message.author.bot and message.author.id in IGNORED_BOT_IDS:
+    if message.webhook_id in IGNORED_WEBHOOK_IDS:
         return
 
     if message.channel.id == TARGET_CHANNEL_ID:
@@ -231,7 +226,7 @@ async def on_message(message):
 @client.event
 async def on_reaction_add(reaction, user):
     if (
-        (user.bot and user.id in IGNORED_BOT_IDS)
+        reaction.message.webhook_id in IGNORED_WEBHOOK_IDS
         or reaction.message.channel.id != TARGET_CHANNEL_ID
         or getattr(reaction.emoji, "id", None) != TARGET_EMOJI_ID
     ):
@@ -294,4 +289,3 @@ async def on_ready():
 # RUN
 # ================================
 client.run(TOKEN)
-
