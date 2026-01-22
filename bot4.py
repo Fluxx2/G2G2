@@ -20,12 +20,17 @@ MAX_EDIT_AGE_SECONDS = 55 * 60
 
 NO_TOGGLE_USER_IDS = {
     1252645184777359391,
-    906546198754775082
+    906546198754775082,
 }
 
 # ✅ WEBHOOK IDS THAT SHOULD BE ALLOWED
 ALLOWED_WEBHOOK_IDS = {
-    1463699794286346315,  # <-- replace with real webhook ID
+    1463699794286346315,
+}
+
+# ✅ NEW: WEBHOOK IDS THAT SHOULD NOT TOGGLE / SHOW TIMER
+NO_TOGGLE_WEBHOOK_IDS = {
+    1463699794286346315,  # example
 }
 
 VARIANT_ROLE_ID = 1460446818407022785
@@ -222,7 +227,12 @@ async def on_message(message):
         if has_variant_role(message.author)
         else [match.group(0)],
         "source_created_at": message.created_at,
-        "show_timer": message.author.id not in NO_TOGGLE_USER_IDS
+
+        # ✅ UPDATED: user + webhook no-toggle support
+        "show_timer": (
+            message.author.id not in NO_TOGGLE_USER_IDS
+            and message.webhook_id not in NO_TOGGLE_WEBHOOK_IDS
+        )
     })
 
     await update_message(force=True)
