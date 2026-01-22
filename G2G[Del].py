@@ -119,8 +119,14 @@ async def sync_today_from_scratch():
     cutoff = ist_midnight_utc()
 
     async for msg in channel.history(after=cutoff, limit=None):
+        # ✅ React to webhook messages instead of skipping
         if msg.webhook_id in IGNORED_WEBHOOK_IDS:
-            continue
+            try:
+                await msg.add_reaction(discord.Object(id=TARGET_EMOJI_ID))
+                await msg.add_reaction(discord.Object(id=SECOND_EMOJI_ID))
+            except:
+                pass
+            # continue processing normally
 
         cursor.execute("""
         INSERT INTO daily_messages (user_id, msg_date, count)
@@ -185,8 +191,14 @@ async def delete_bot_messages_task():
 # ================================
 @client.event
 async def on_message(message):
+    # ✅ React to webhook messages
     if message.webhook_id in IGNORED_WEBHOOK_IDS:
-        return
+        try:
+            await message.add_reaction(discord.Object(id=TARGET_EMOJI_ID))
+            await message.add_reaction(discord.Object(id=SECOND_EMOJI_ID))
+        except:
+            pass
+        # continue processing normally
 
     if message.channel.id == TARGET_CHANNEL_ID:
         cursor.execute("""
