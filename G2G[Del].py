@@ -118,15 +118,19 @@ async def sync_today_from_scratch():
 
     cutoff = ist_midnight_utc()
 
+    # Fetch emoji objects
+    target_emoji = client.get_emoji(TARGET_EMOJI_ID)
+    second_emoji = client.get_emoji(SECOND_EMOJI_ID)
+
     async for msg in channel.history(after=cutoff, limit=None):
-        # ✅ React to webhook messages instead of skipping
         if msg.webhook_id in IGNORED_WEBHOOK_IDS:
             try:
-                await msg.add_reaction(discord.Object(id=TARGET_EMOJI_ID))
-                await msg.add_reaction(discord.Object(id=SECOND_EMOJI_ID))
-            except:
-                pass
-            # continue processing normally
+                if target_emoji:
+                    await msg.add_reaction(target_emoji)
+                if second_emoji:
+                    await msg.add_reaction(second_emoji)
+            except Exception as e:
+                print(f"Error reacting to webhook message: {e}")
 
         cursor.execute("""
         INSERT INTO daily_messages (user_id, msg_date, count)
@@ -167,10 +171,13 @@ async def delete_bot_messages_task():
         try:
             async for msg in channel.history(limit=50):
                 if msg.author.id == client.user.id:
-
                     try:
-                        await msg.add_reaction(discord.Object(id=TARGET_EMOJI_ID))
-                        await msg.add_reaction(discord.Object(id=SECOND_EMOJI_ID))
+                        target_emoji = client.get_emoji(TARGET_EMOJI_ID)
+                        second_emoji = client.get_emoji(SECOND_EMOJI_ID)
+                        if target_emoji:
+                            await msg.add_reaction(target_emoji)
+                        if second_emoji:
+                            await msg.add_reaction(second_emoji)
                     except:
                         pass
 
@@ -191,14 +198,17 @@ async def delete_bot_messages_task():
 # ================================
 @client.event
 async def on_message(message):
-    # ✅ React to webhook messages
+    # React to targeted webhook messages
+    target_emoji = client.get_emoji(TARGET_EMOJI_ID)
+    second_emoji = client.get_emoji(SECOND_EMOJI_ID)
     if message.webhook_id in IGNORED_WEBHOOK_IDS:
         try:
-            await message.add_reaction(discord.Object(id=TARGET_EMOJI_ID))
-            await message.add_reaction(discord.Object(id=SECOND_EMOJI_ID))
-        except:
-            pass
-        # continue processing normally
+            if target_emoji:
+                await message.add_reaction(target_emoji)
+            if second_emoji:
+                await message.add_reaction(second_emoji)
+        except Exception as e:
+            print(f"Error reacting to webhook message: {e}")
 
     if message.channel.id == TARGET_CHANNEL_ID:
         cursor.execute("""
