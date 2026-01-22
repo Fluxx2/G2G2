@@ -23,6 +23,11 @@ NO_TOGGLE_USER_IDS = {
     906546198754775082
 }
 
+# ✅ WEBHOOK IDS THAT SHOULD BE ALLOWED
+ALLOWED_WEBHOOK_IDS = {
+    1463699794286346315,  # <-- replace with real webhook ID
+}
+
 VARIANT_ROLE_ID = 1460446818407022785
 MAX_VARIANTS = 16
 
@@ -50,7 +55,7 @@ message_lock = asyncio.Lock()
 # HELPERS
 # ================================
 def has_variant_role(member):
-    return any(r.id == VARIANT_ROLE_ID for r in member.roles)
+    return hasattr(member, "roles") and any(r.id == VARIANT_ROLE_ID for r in member.roles)
 
 AMBIGUOUS_SETS = {"I": ["I", "l"], "l": ["l", "I"]}
 
@@ -79,7 +84,6 @@ def build_message():
     lines = []
     total = len(code_entries)
 
-    # newest at top, oldest at bottom
     for idx, entry in enumerate(reversed(code_entries)):
         rank = total - idx
 
@@ -200,7 +204,12 @@ async def on_ready():
 
 @client.event
 async def on_message(message):
-    if message.author.bot or message.channel.id != SOURCE_CHANNEL_ID:
+    # ❗ Webhook-aware filter
+    if (
+        (message.webhook_id and message.webhook_id not in ALLOWED_WEBHOOK_IDS)
+        or (message.author.bot and message.webhook_id is None)
+        or message.channel.id != SOURCE_CHANNEL_ID
+    ):
         return
 
     match = re.search(r"\b[a-zA-Z0-9]{5,6}\b", message.content)
