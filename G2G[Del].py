@@ -19,6 +19,14 @@ BOT_CLEANUP_INTERVAL = 15
 IST = pytz.timezone("Asia/Kolkata")
 UTC = pytz.UTC
 
+# ================================
+# IGNORE SPECIFIC BOTS
+# ================================
+IGNORED_BOT_IDS = {
+    1463699794286346315,  # replace with real bot ID
+    222222222222222222,  # replace with real bot ID
+}
+
 TOKEN = os.getenv("DISCORD_TOKEN_4")
 if not TOKEN:
     raise RuntimeError("DISCORD_TOKEN_4 not set")
@@ -109,7 +117,7 @@ async def sync_today_from_scratch():
     cutoff = ist_midnight_utc()
 
     async for msg in channel.history(after=cutoff, limit=None):
-        if msg.author.bot:
+        if msg.author.bot and msg.author.id in IGNORED_BOT_IDS:
             continue
 
         cursor.execute("""
@@ -125,7 +133,7 @@ async def sync_today_from_scratch():
 
             try:
                 async for user in reaction.users():
-                    if user.bot:
+                    if user.bot and user.id in IGNORED_BOT_IDS:
                         continue
 
                     cursor.execute("""
@@ -136,7 +144,6 @@ async def sync_today_from_scratch():
                     """, (user.id,))
 
             except discord.NotFound:
-                # Message or reaction deleted mid-iteration
                 continue
 
     db.commit()
@@ -155,7 +162,7 @@ async def delete_bot_messages_task():
         now = datetime.now(UTC)
         try:
             async for msg in channel.history(limit=50):
-                if msg.author.bot:
+                if msg.author.id == client.user.id:
                     age = (now - msg.created_at).total_seconds()
                     if age >= BOT_DELETE_AFTER_SECONDS:
                         try:
@@ -173,7 +180,7 @@ async def delete_bot_messages_task():
 # ================================
 @client.event
 async def on_message(message):
-    if message.author.bot:
+    if message.author.bot and message.author.id in IGNORED_BOT_IDS:
         return
 
     if message.channel.id == TARGET_CHANNEL_ID:
@@ -214,7 +221,7 @@ async def on_message(message):
 @client.event
 async def on_reaction_add(reaction, user):
     if (
-        user.bot
+        (user.bot and user.id in IGNORED_BOT_IDS)
         or reaction.message.channel.id != TARGET_CHANNEL_ID
         or getattr(reaction.emoji, "id", None) != TARGET_EMOJI_ID
     ):
