@@ -10,7 +10,9 @@ import pytz
 # ================================
 TARGET_CHANNEL_ID = 1442370325831487608
 COMMAND_CHANNEL_ID = 1442370326116827259
+
 TARGET_EMOJI_ID = 1443112156693397534
+SECOND_EMOJI_ID = 1444022259789467709
 
 DB_FILE = "wins.db"
 BOT_DELETE_AFTER_SECONDS = 220
@@ -23,8 +25,8 @@ UTC = pytz.UTC
 # IGNORE SPECIFIC BOTS
 # ================================
 IGNORED_BOT_IDS = {
-    1463699794286346315,  # replace with real bot ID
-    222222222222222222,  # replace with real bot ID
+    111111111111111111,
+    222222222222222222,
 }
 
 TOKEN = os.getenv("DISCORD_TOKEN_4")
@@ -149,7 +151,7 @@ async def sync_today_from_scratch():
     db.commit()
 
 # ================================
-# BOT MESSAGE CLEANUP
+# BOT MESSAGE CLEANUP + REACTIONS
 # ================================
 async def delete_bot_messages_task():
     await client.wait_until_ready()
@@ -163,6 +165,14 @@ async def delete_bot_messages_task():
         try:
             async for msg in channel.history(limit=50):
                 if msg.author.id == client.user.id:
+
+                    # 🔹 AUTO-REACT WITH BOTH EMOJIS
+                    try:
+                        await msg.add_reaction(discord.Object(id=TARGET_EMOJI_ID))
+                        await msg.add_reaction(discord.Object(id=SECOND_EMOJI_ID))
+                    except:
+                        pass
+
                     age = (now - msg.created_at).total_seconds()
                     if age >= BOT_DELETE_AFTER_SECONDS:
                         try:
@@ -284,3 +294,4 @@ async def on_ready():
 # RUN
 # ================================
 client.run(TOKEN)
+
