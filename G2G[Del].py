@@ -26,7 +26,7 @@ UTC = pytz.UTC
 # ================================
 IGNORED_WEBHOOK_IDS = {
     1463699794286346315,  # replace with your webhook ID(s)
-    222222222222222222,
+    1463037019021377639,
 }
 
 TOKEN = os.getenv("DISCORD_TOKEN_4")
