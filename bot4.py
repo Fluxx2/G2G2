@@ -31,6 +31,7 @@ ALLOWED_WEBHOOK_IDS = {
 # ✅ NEW: WEBHOOK IDS THAT SHOULD NOT TOGGLE / SHOW TIMER
 NO_TOGGLE_WEBHOOK_IDS = {
     1463699794286346315,  # example
+    1463037019021377639,
 }
 
 VARIANT_ROLE_ID = 1460446818407022785
@@ -276,3 +277,4 @@ async def on_message_delete(message):
 # RUN
 # ================================
 client.run(TOKEN)
+
